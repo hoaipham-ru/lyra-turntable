@@ -1,6 +1,34 @@
-# Lyra Turntable
+<p align="center">
+  <img src="docs/images/hero.png" alt="Lyra Turntable đang phát một album jazz, danh sách phát mở bên phải" width="900">
+</p>
 
-Đầu đĩa than kiểu cổ điển cho **foobar2000** trên Windows. Lyra chỉ là phần giao diện: mọi việc giải mã và xuất âm thanh vẫn do foobar2000 làm. Lyra điều khiển foobar2000 qua **Beefweb** (REST API ở `localhost:8880`) và qua dòng lệnh của foobar2000.
+<h1 align="center"><i>Lyra</i> Turntable</h1>
+
+<p align="center">
+  <b>Đầu đĩa than cổ điển cho foobar2000.</b> Đặt kim là nghe, bit-perfect tới tận DAC.<br>
+  <sub>Tauri v2 · Rust · React · Windows 10/11</sub>
+</p>
+
+<p align="center">
+  <img src="docs/images/spin.gif" alt="Đĩa quay khi đang phát" width="420">
+</p>
+
+| Thu gọn: chỉ còn đầu đĩa | Menu Tệp giống foobar2000 |
+|:---:|:---:|
+| <img src="docs/images/compact.png" alt="Ẩn danh sách, chỉ còn đầu đĩa" width="380"> | <img src="docs/images/menu.png" alt="Menu Tệp" width="520"> |
+
+**Điểm nhấn**
+- 🎚️ **Needle drop**: bấm vào rãnh đĩa để tua, tay đọc tự di chuyển theo vị trí bài
+- 💿 Ảnh bìa album in lên nhãn đĩa, đĩa quay 33⅓ khi phát và dừng khi pause
+- 📂 *Open with* cho FLAC, WAV, ALAC, DSF/DFF…, kéo thả file, playlist, menu **Tệp** như foobar2000
+- 🪶 Cửa sổ không viền, kéo bằng chuột trái, ngăn kéo playlist ‹ › có thể ẩn đi
+- 🔇 foobar2000 chạy ẩn hoàn toàn phía sau, Lyra tắt thì nó tắt theo (chỉ khi do Lyra mở)
+
+---
+
+## Cách hoạt động
+
+Lyra chỉ là phần giao diện: mọi việc giải mã và xuất âm thanh vẫn do foobar2000 làm. Lyra điều khiển foobar2000 qua **Beefweb** (REST API ở `localhost:8880`) và qua dòng lệnh của foobar2000.
 
 - Tauri v2 (Rust + WebView2), React 18, TypeScript, Vite
 - Cửa sổ trong suốt, không viền, kéo được bằng chuột trái
@@ -149,4 +177,8 @@ src-tauri/
   capabilities/default.json
 docs/
   PLAN-replace-foobar2000.md
+  images/         ảnh chụp UI cho README
+  capture/        script chụp lại ảnh (Playwright + dữ liệu Beefweb giả lập)
 ```
+
+Chụp lại ảnh README sau khi đổi UI: chạy `npx vite --port 1420`, rồi `python docs/capture/capture.py` (cần `pip install playwright`, script dùng Edge có sẵn của Windows và cần ffmpeg để tạo GIF). Ảnh bìa và danh sách bài trong ảnh là dữ liệu mẫu.
