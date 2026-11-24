@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Lyra: a lyre on the red label of a black record, on the cream aluminium of the turntable -->
+  <rect x="48" y="48" width="928" height="928" rx="190" fill="#e6dfd1"/>
+  <circle cx="512" cy="512" r="392" fill="#141312"/>
+  <circle cx="512" cy="512" r="340" fill="none" stroke="#2c2a28" stroke-width="10"/>
+  <circle cx="512" cy="512" r="290" fill="none" stroke="#2c2a28" stroke-width="10"/>
+  <circle cx="512" cy="512" r="232" fill="#9c2f22"/>
+  <g fill="none" stroke="#f3e6d2" stroke-linecap="round" stroke-linejoin="round">
+    <!-- arms -->
+    <path d="M 432 650 C 380 600 360 520 392 448 C 410 408 440 392 452 360" stroke-width="30"/>
+    <path d="M 592 650 C 644 600 664 520 632 448 C 614 408 584 392 572 360" stroke-width="30"/>
+    <!-- yoke and base -->
+    <path d="M 420 402 L 604 402" stroke-width="26"/>
+    <path d="M 432 650 L 592 650" stroke-width="30"/>
+    <!-- strings -->
+    <path d="M 470 402 L 470 650 M 512 402 L 512 650 M 554 402 L 554 650" stroke-width="12"/>
+  </g>
+  <circle cx="512" cy="512" r="14" fill="#141312"/>
+</svg>
