@@ -1,184 +1,186 @@
 <p align="center">
-  <img src="docs/images/hero.png" alt="Lyra Turntable đang phát một album jazz, danh sách phát mở bên phải" width="900">
+  <img src="docs/images/hero.png" alt="Lyra Turntable playing a jazz album with the playlist drawer open" width="900">
 </p>
 
 <h1 align="center"><i>Lyra</i> Turntable</h1>
 
 <p align="center">
-  <b>Đầu đĩa than cổ điển cho foobar2000.</b> Đặt kim là nghe, bit-perfect tới tận DAC.<br>
+  <b>A classic record player for foobar2000.</b> Drop the needle and listen, bit-perfect all the way to your DAC.<br>
   <sub>Tauri v2 · Rust · React · Windows 10/11</sub>
 </p>
 
 <p align="center">
-  <img src="docs/images/spin.gif" alt="Đĩa quay khi đang phát" width="420">
+  <img src="docs/images/spin.gif" alt="The record spinning during playback" width="420">
 </p>
 
-| Thu gọn: chỉ còn đầu đĩa | Menu Tệp giống foobar2000 |
+| Compact: turntable only | A File menu like foobar2000's |
 |:---:|:---:|
-| <img src="docs/images/compact.png" alt="Ẩn danh sách, chỉ còn đầu đĩa" width="380"> | <img src="docs/images/menu.png" alt="Menu Tệp" width="520"> |
+| <img src="docs/images/compact.png" alt="Playlist hidden, only the turntable" width="380"> | <img src="docs/images/menu.png" alt="File menu" width="520"> |
 
-**Điểm nhấn**
-- 🎚️ **Needle drop**: bấm vào rãnh đĩa để tua, tay đọc tự di chuyển theo vị trí bài
-- 💿 Ảnh bìa album in lên nhãn đĩa, đĩa quay 33⅓ khi phát và dừng khi pause
-- 📂 *Open with* cho FLAC, WAV, ALAC, DSF/DFF…, kéo thả file, playlist, menu **Tệp** như foobar2000
-- 🪶 Cửa sổ không viền, kéo bằng chuột trái, ngăn kéo playlist ‹ › có thể ẩn đi
-- 🔇 foobar2000 chạy ẩn hoàn toàn phía sau, Lyra tắt thì nó tắt theo (chỉ khi do Lyra mở)
+**Highlights**
+- 🎚️ **Needle drop**: click any groove to seek, and the tonearm follows the track position
+- 💿 Album art is printed on the record label; the record spins at 33⅓ while playing and stops on pause
+- 📂 *Open with* for FLAC, WAV, ALAC, DSF/DFF…, drag & drop, playlists, and a **File** menu modeled on foobar2000
+- 🪶 Frameless window you drag with the left mouse button, plus a ‹ › playlist drawer that slides away
+- 🔇 foobar2000 runs fully hidden behind it, and quits with Lyra (only if Lyra started it)
 
 ---
 
-## Cách hoạt động
+## How it works
 
-Lyra chỉ là phần giao diện: mọi việc giải mã và xuất âm thanh vẫn do foobar2000 làm. Lyra điều khiển foobar2000 qua **Beefweb** (REST API ở `localhost:8880`) và qua dòng lệnh của foobar2000.
+Lyra is only the front end: decoding and audio output are still done by foobar2000. Lyra controls foobar2000 through **Beefweb** (a REST API on `localhost:8880`) and through foobar2000's command line.
 
 - Tauri v2 (Rust + WebView2), React 18, TypeScript, Vite
-- Cửa sổ trong suốt, không viền, kéo được bằng chuột trái
-- Phiên bản hiện tại: **0.3.0**
+- Transparent, frameless window
+- Current version: **0.3.0**
 
-> Kế hoạch thay foobar2000 bằng engine riêng: xem [docs/PLAN-replace-foobar2000.md](docs/PLAN-replace-foobar2000.md).
+> The UI labels are in Vietnamese. This README quotes each label with its English meaning, e.g. **Tệp** (File).
+
+> Plan for replacing foobar2000 with a native engine: see [docs/PLAN-replace-foobar2000.md](docs/PLAN-replace-foobar2000.md).
 
 ---
 
-## 1. Yêu cầu
+## 1. Requirements
 
-| Thành phần | Ghi chú |
+| Component | Notes |
 |---|---|
-| Windows 10/11 x64 | Có sẵn WebView2 |
-| foobar2000 v2 x64 | Cài chuẩn tại `C:\Program Files\foobar2000\foobar2000.exe` (đường dẫn đang hard-code trong `src-tauri/src/lib.rs`) |
-| `foo_beefweb` (0.10+) | **Bắt buộc**: Lyra nói chuyện với foobar2000 qua component này |
-| `foo_out_asio` | Tuỳ chọn: xuất qua driver ASIO của DAC |
-| `foo_input_sacd` | Tuỳ chọn: đọc DSD (`.dsf`, `.dff`, SACD `.iso`) |
-| `foo_dsd_processor` | Tuỳ chọn: xử lý/chuyển đổi DSD |
+| Windows 10/11 x64 | WebView2 is preinstalled |
+| foobar2000 v2 x64 | Standard install at `C:\Program Files\foobar2000\foobar2000.exe` (the path is hard-coded in `src-tauri/src/lib.rs`) |
+| `foo_beefweb` (0.10+) | **Required**: Lyra talks to foobar2000 through it |
+| `foo_out_asio` | Optional: output through your DAC's ASIO driver |
+| `foo_input_sacd` | Optional: DSD playback (`.dsf`, `.dff`, SACD `.iso`) |
+| `foo_dsd_processor` | Optional: DSD processing/conversion |
 
-### Cấu hình Beefweb
+### Beefweb settings
 foobar2000 → *File › Preferences › Tools › Beefweb Remote Control*:
 - **Port**: `8880`
-- **Allow remote connections**: tắt (Lyra chỉ cần `localhost`)
-- **Require authentication**: tắt
+- **Allow remote connections**: off (Lyra only needs `localhost`)
+- **Require authentication**: off
 
 ---
 
-## 2. Cài đặt
+## 2. Installation
 
-**Cách 1: dùng bộ cài**
-Chạy `Lyra Turntable_0.3.0_x64-setup.exe`. App được cài cho riêng user hiện tại tại `%LOCALAPPDATA%\Lyra Turntable\lyra.exe`, không cần quyền admin.
+**Option 1: installer**
+Run `Lyra Turntable_0.3.0_x64-setup.exe`. It installs for the current user only, to `%LOCALAPPDATA%\Lyra Turntable\lyra.exe`, with no admin rights needed.
 
-**Cách 2: build từ mã nguồn**
+**Option 2: build from source**
 ```powershell
-# cần: Node 20+, Rust (msvc), VS Build Tools 2022 (C++ workload + Windows SDK)
+# needs: Node 20+, Rust (msvc), VS Build Tools 2022 (C++ workload + Windows SDK)
 npm install
-npm run tauri dev     # chạy thử
-npx tauri build       # ra bộ cài ở src-tauri\target\release\bundle\nsis\
+npm run tauri dev     # run in development
+npx tauri build       # installer lands in src-tauri\target\release\bundle\nsis\
 ```
-Đổi icon: sửa `app-icon.svg` rồi chạy `npx tauri icon app-icon.svg`.
+To change the icon, edit `app-icon.svg` and run `npx tauri icon app-icon.svg`.
 
 ---
 
-## 3. Phát file high-end mà vẫn giữ nguyên chất lượng (bit-perfect)
+## 3. Playing high-resolution files without losing quality (bit-perfect)
 
-Mục tiêu là đưa **đúng từng bit trong file** tới DAC, không để Windows hay phần mềm nào resample, trộn tiếng hay giảm âm lượng bằng số. Lyra không động vào dữ liệu âm thanh, nên mọi thiết lập dưới đây nằm trong **foobar2000** và **Windows**.
+The goal is to deliver **exactly the bits in the file** to the DAC, with no resampling, mixing or digital volume from Windows or any software along the way. Lyra never touches the audio data, so every setting below lives in **foobar2000** and **Windows**.
 
-> Tên các mục menu có thể lệch chút tuỳ phiên bản foobar2000 và component.
+> Menu names may differ slightly between foobar2000 and component versions.
 
-### 3.1 Chọn đường ra độc quyền (exclusive)
+### 3.1 Use an exclusive output
 foobar2000 → *Preferences › Playback › Output*:
-- **Device**: chọn một trong hai
-  - `WASAPI (exclusive) : <tên DAC>`: chuẩn của Windows, DAC nào cũng dùng được.
-  - `ASIO : <driver của DAC>`: cần `foo_out_asio` và driver ASIO của hãng DAC. Thường ổn định hơn, và là cách duy nhất để phát **DSD native**.
-- **Output format**: chọn độ sâu bit cao nhất DAC hỗ trợ (24-bit hoặc 32-bit).
-- **Buffer length**: khoảng 1000 ms. Tăng lên nếu nghe thấy tiếng lụp bụp.
+- **Device**: pick one of
+  - `WASAPI (exclusive) : <your DAC>`: built into Windows, works with any DAC.
+  - `ASIO : <your DAC's driver>`: needs `foo_out_asio` and the manufacturer's ASIO driver. Usually more stable, and the only way to play **native DSD**.
+- **Output format**: the highest bit depth your DAC supports (24-bit or 32-bit).
+- **Buffer length**: around 1000 ms. Raise it if you hear clicks or dropouts.
 
-**Tránh dùng** `Primary Sound Driver` hay `DirectSound`. Hai đường này đi qua bộ trộn của Windows, nên âm thanh bị resample về sample rate mặc định của hệ thống.
+**Avoid** `Primary Sound Driver` and `DirectSound`. Both go through the Windows mixer, which resamples everything to the system's default sample rate.
 
-### 3.2 Không để gì xử lý tín hiệu
-- *Preferences › Playback › DSP Manager*: danh sách **Active DSPs để trống** (không resampler, không equalizer, không crossfeed).
+### 3.2 Let nothing process the signal
+- *Preferences › Playback › DSP Manager*: **leave Active DSPs empty** (no resampler, equalizer or crossfeed).
 - *Preferences › Playback › ReplayGain*: **Source mode = none**.
-- **Âm lượng foobar2000 để ở 0 dB (mức tối đa)**. Núm volume trên Lyra chính là volume số của foobar2000: vặn nhỏ đi là cắt bit, không còn bit-perfect. Hãy chỉnh âm lượng bằng núm trên DAC hoặc ampli.
+- **Keep foobar2000's volume at 0 dB (maximum).** Lyra's volume knob *is* foobar2000's digital volume: turning it down throws away bits, and playback is no longer bit-perfect. Set the listening level on your DAC or amplifier instead.
 
 ### 3.3 Windows
-*Control Panel › Sound › <DAC> › Properties*:
-- *Advanced*: bật **Allow applications to take exclusive control of this device**.
-- *Enhancements* hoặc *Audio enhancements*: **tắt hết**.
+*Control Panel › Sound › <your DAC> › Properties*:
+- *Advanced*: enable **Allow applications to take exclusive control of this device**.
+- *Enhancements* / *Audio enhancements*: **turn all off**.
 - *Spatial sound*: **Off**.
 
-### 3.4 PCM hi-res (FLAC 24/96, 24/192, WAV, ALAC, AIFF, WavPack, APE)
-Không cần làm gì thêm. Khi dùng WASAPI exclusive hoặc ASIO, DAC tự chuyển sang đúng sample rate của từng bài. Đèn hoặc màn hình trên DAC sẽ đổi theo, ví dụ 44.1 → 96 → 192 kHz.
+### 3.4 Hi-res PCM (FLAC 24/96, 24/192, WAV, ALAC, AIFF, WavPack, APE)
+Nothing else to do. With WASAPI exclusive or ASIO, the DAC switches to each track's native sample rate. Its display or indicator light should change accordingly, e.g. 44.1 → 96 → 192 kHz.
 
 ### 3.5 DSD (`.dsf`, `.dff`, SACD `.iso`)
-Cần `foo_input_sacd`. Trong *Preferences › Tools › SACD* (hoặc *DSD*), **Output Mode** có ba lựa chọn:
+Requires `foo_input_sacd`. Under *Preferences › Tools › SACD* (or *DSD*), **Output Mode** offers three options:
 
-| Chế độ | Khi nào dùng | Đường ra |
+| Mode | When to use | Output |
 |---|---|---|
-| **PCM** | DAC không hỗ trợ DSD | Bất kỳ. DSD được chuyển sang PCM, không còn là DSD gốc |
-| **DSD (DoP)** | DAC hỗ trợ DoP (đa số DAC USB đời mới) | WASAPI exclusive 24-bit, hoặc ASIO |
-| **DSD native** | DAC có driver ASIO hỗ trợ DSD | ASIO |
+| **PCM** | DAC has no DSD support | Any. DSD is converted to PCM and is no longer native DSD |
+| **DSD (DoP)** | DAC supports DoP (most modern USB DACs) | WASAPI exclusive 24-bit, or ASIO |
+| **Native DSD** | DAC has an ASIO driver with DSD support | ASIO |
 
-Kiểm tra: khi phát file DSD, DAC phải báo **DSD64** hoặc **DSD128**…, chứ không báo 176.4 kHz PCM. Nếu DAC báo PCM ở chế độ DoP, nguyên nhân thường là âm lượng không ở 0 dB hoặc có DSP nào đó đang can thiệp vào dữ liệu DoP.
+Check: while a DSD file plays, the DAC should show **DSD64**, **DSD128** and so on, not 176.4 kHz PCM. If it shows PCM in DoP mode, the usual cause is a volume below 0 dB or a DSP altering the DoP data.
 
-SACD `.iso` không có trong menu chuột phải *Open with*. Hãy dùng **Tệp › Thêm tệp** hoặc kéo thả file vào Lyra.
+SACD `.iso` is not in the *Open with* menu. Use **Tệp › Thêm file…** (File › Add files) or drag the file onto Lyra.
 
-### 3.6 Checklist nhanh
-- [ ] Output = WASAPI (exclusive) hoặc ASIO
-- [ ] DSP Manager trống, ReplayGain = none
-- [ ] Volume foobar2000 / Lyra = 0 dB, chỉnh âm lượng trên DAC
-- [ ] Windows: cho phép exclusive, tắt enhancements
-- [ ] DSD: chọn DoP hoặc native, DAC hiện chữ DSD
+### 3.6 Quick checklist
+- [ ] Output = WASAPI (exclusive) or ASIO
+- [ ] DSP Manager empty, ReplayGain = none
+- [ ] foobar2000 / Lyra volume at 0 dB, level set on the DAC
+- [ ] Windows: exclusive mode allowed, enhancements off
+- [ ] DSD: DoP or native selected, DAC shows DSD
 
 ---
 
-## 4. Dùng Lyra
+## 4. Using Lyra
 
-| Việc | Cách làm |
+| Task | How |
 |---|---|
-| Mở một file nhạc | Chuột phải file › **Open with › Lyra Turntable**, hoặc **Tệp › Mở…** (Ctrl+O). File được phát trong *Default Playlist* |
-| Thêm vào playlist đang xem | **Tệp › Thêm tệp / Thêm thư mục / Thêm địa chỉ (URL)**, hoặc kéo thả vào cửa sổ |
-| Playlist | **Tệp › Playlist mới** (Ctrl+N), **Mở/Lưu playlist** (Ctrl+S). Chọn playlist ở ô chọn phía trên danh sách. Nút × xoá từng bài, **Xóa hết** xoá cả danh sách |
-| Tua (needle drop) | Bấm vào một rãnh trên đĩa |
-| Điều khiển | Phím đàn PREV / PLAY / NEXT, núm volume (nhớ đọc mục 3.2) |
-| Ẩn/hiện danh sách | Bấm mũi tên ‹ / › ở mép giữa đĩa và danh sách |
-| Di chuyển cửa sổ | Nhấn giữ **chuột trái** ở bất kỳ chỗ trống nào rồi kéo |
-| Ghim trên cùng / thu nhỏ / đóng | Ba nút góc trên bên phải |
-| Khay hệ thống | Play/Pause, Next, Prev, Hiện Lyra, Hiện/ẩn foobar2000, Thoát |
-| Cài đặt foobar2000 | **Tệp › Tuỳ chọn** (Ctrl+P) mở Preferences của foobar2000 |
+| Open a music file | Right-click the file › **Open with › Lyra Turntable**, or **Tệp › Mở file…** (File › Open, Ctrl+O). The file plays in *Default Playlist* |
+| Add to the playlist on screen | **Tệp › Thêm file… / Thêm thư mục… / Thêm địa chỉ…** (Add files / Add folder / Add location, Ctrl+U), or drag & drop onto the window |
+| Playlists | **Playlist mới** (New playlist, Ctrl+N), **Mở playlist…** (Load), **Lưu playlist…** (Save, Ctrl+S). Switch playlists with the picker above the list. × removes a track, **Xóa hết** (Clear all) empties the list |
+| Seek (needle drop) | Click a groove on the record |
+| Transport | The PREV / PLAY / NEXT keys and the volume knob (read section 3.2 first) |
+| Show/hide the playlist | Click the ‹ / › tab between the turntable and the list |
+| Move the window | Press and hold the **left mouse button** on any empty area and drag |
+| Pin on top / minimize / close | The three buttons at the top right |
+| System tray | Play/Pause, Next, Prev, **Hiện Lyra** (Show Lyra), show/hide foobar2000, Quit |
+| foobar2000 settings | **Tệp › Cài đặt foobar2000** (File › foobar2000 Preferences, Ctrl+P) |
 
-### Cách Lyra xử lý foobar2000
-- Nếu foobar2000 **chưa chạy**: Lyra tự khởi động nó và **ẩn hoàn toàn** cửa sổ của nó. Khi bạn đóng Lyra, foobar2000 cũng được đóng theo.
-- Nếu foobar2000 **đang chạy sẵn** (do bạn tự mở): Lyra dùng chung và **không** đóng nó khi Lyra thoát.
+### How Lyra handles foobar2000
+- If foobar2000 is **not running**, Lyra starts it and **fully hides** its window. Closing Lyra also closes foobar2000.
+- If foobar2000 is **already running** (you opened it yourself), Lyra shares it and does **not** close it on exit.
 
 ### Default Playlist
-- Mỗi lần khởi động, *Default Playlist* được làm trống, **trừ khi** bạn đã tự thêm bài vào đó hoặc nó đang phát.
-- File mở bằng *Open with* hay *Tệp › Mở* luôn vào *Default Playlist* và phát ngay.
+- On startup, *Default Playlist* is emptied, **unless** you added tracks to it yourself or it is currently playing.
+- Files opened via *Open with* or **Tệp › Mở file…** always go to *Default Playlist* and start playing.
 
 ---
 
-## 5. Xử lý sự cố
+## 5. Troubleshooting
 
-| Triệu chứng | Kiểm tra |
+| Symptom | Check |
 |---|---|
-| Lyra báo không kết nối được | foobar2000 có đang chạy không? Beefweb đã bật ở port 8880 chưa? Mở thử `http://localhost:8880/api/player` |
-| Không thấy Lyra trong *Open with* | Chạy Lyra một lần (lần chạy đầu sẽ đăng ký). Lyra không bao giờ tự đặt mình làm app mặc định |
-| Icon cũ vẫn hiện | Do cache icon của Windows. Đăng xuất rồi đăng nhập lại |
-| Âm thanh lụp bụp khi dùng exclusive | Tăng Buffer length, dùng ASIO nếu DAC có driver |
-| DAC không đổi sample rate | Đang dùng DirectSound/Primary hoặc có resampler trong DSP. Xem lại mục 3 |
+| Lyra can't connect | Is foobar2000 running? Is Beefweb enabled on port 8880? Try opening `http://localhost:8880/api/player` |
+| Lyra is missing from *Open with* | Launch Lyra once (it registers on first run). Lyra never makes itself the default app |
+| The old icon still shows | Windows icon cache. Sign out and back in |
+| Clicks or dropouts in exclusive mode | Increase Buffer length, or use ASIO if your DAC has a driver |
+| DAC doesn't change sample rate | You are on DirectSound/Primary, or a resampler is in the DSP chain. Review section 3 |
 
 ---
 
-## 6. Cấu trúc mã
+## 6. Project layout
 
 ```
 src/
-  App.tsx         khung cửa sổ, menu Tệp, playlist, drawer, kéo cửa sổ, Open-with
-  Turntable.tsx   đầu đĩa SVG (đĩa, tay đọc, phím, núm volume)
-  player.ts       hook useFoobar: gọi Beefweb, poll trạng thái mỗi 1 giây
+  App.tsx         window shell, File menu, playlists, drawer, window drag, Open-with
+  Turntable.tsx   SVG turntable (record, tonearm, keys, volume knob)
+  player.ts       useFoobar hook: Beefweb calls, polls state every second
   styles.css
 src-tauri/
-  src/lib.rs      vòng đời foobar2000, ẩn cửa sổ (Win32), khay hệ thống,
-                  single-instance, đăng ký Open-with (HKCU)
+  src/lib.rs      foobar2000 lifecycle, window hiding (Win32), tray,
+                  single instance, Open-with registration (HKCU)
   tauri.conf.json
   capabilities/default.json
 docs/
   PLAN-replace-foobar2000.md
-  images/         ảnh chụp UI cho README
-  capture/        script chụp lại ảnh (Playwright + dữ liệu Beefweb giả lập)
+  images/         UI screenshots for this README
+  capture/        script that re-renders them (Playwright + mocked Beefweb)
 ```
 
-Chụp lại ảnh README sau khi đổi UI: chạy `npx vite --port 1420`, rồi `python docs/capture/capture.py` (cần `pip install playwright`, script dùng Edge có sẵn của Windows và cần ffmpeg để tạo GIF). Ảnh bìa và danh sách bài trong ảnh là dữ liệu mẫu.
+To refresh the screenshots after a UI change: run `npx vite --port 1420`, then `python docs/capture/capture.py` (needs `pip install playwright`; the script uses the Edge that ships with Windows, and ffmpeg to build the GIF). The album art and track list in the screenshots are sample data.
