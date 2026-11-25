@@ -4,5 +4,15 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+description = "S02 — Lyra decode: native-PCM FLAC/WAV decoding (symphonia), cross-checked against libFLAC."
+
+[features]
+# OFF by default: the normal build has no external dependency. When enabled,
+# tests may cross-check the symphonia FLAC path against the `flac` CLI (libFLAC).
+libflac-check = []
 
 [dependencies]
+lyra-core = { path = "../lyra-core" }
+symphonia = { version = "0.5", default-features = false, features = ["flac", "wav", "pcm"] }
+
+[dev-dependencies]
