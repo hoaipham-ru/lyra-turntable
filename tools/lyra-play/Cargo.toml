@@ -4,5 +4,13 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+description = "Lyra headless player: raw-PCM playback through lyra-output, with --probe and --tap (S04/S05)."
+
+[[bin]]
+name = "lyra-play"
+path = "src/main.rs"
 
 [dependencies]
+lyra-core = { path = "../../crates/lyra-core" }
+lyra-output = { path = "../../crates/lyra-output" }
+clap = { version = "4", features = ["derive"] }
