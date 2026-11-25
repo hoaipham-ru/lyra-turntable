@@ -1,44 +1,8 @@
 // foobar2000 via Beefweb. Inside Tauri the HTTP plugin makes the requests from Rust, so CORS never applies.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
+import { BASE, isDefault, type PlayerBackend, type Playlist, type Track } from "./PlayerBackend";
 
-export type Track = { title: string; artist: string; album: string; length: number; key: string };
-export type Playlist = { id: string; title: string; isCurrent: boolean; itemCount: number };
-export type PlayerView = {
-  connected: boolean;
-  status: string;
-  state: "playing" | "paused" | "stopped";
-  track: Track | null;
-  position: number;
-  duration: number;
-  volume: number; // 0..1
-  art: string | null;
-  playlists: Playlist[];
-  selected: string | null;   // playlist shown (= foobar2000's active playlist, where /add puts files)
-  list: Track[];
-  current: number;           // index of the playing track in the shown playlist, -1 if it plays elsewhere
-  playPause: () => void;
-  next: () => void;
-  prev: () => void;
-  seek: (sec: number) => void;
-  setVolume: (v: number) => void;
-  playAt: (i: number) => void;
-  selectPlaylist: (id: string) => Promise<void>;
-  newPlaylist: (title: string) => Promise<string | null>;
-  removeItems: (idx: number[]) => Promise<void>;
-  clearPlaylist: () => Promise<void>;
-  refresh: () => Promise<void>;
-  waitForItems: (atLeast: number, ms?: number) => Promise<boolean>;
-  ensureDefault: () => Promise<{ id: string; count: number } | null>;
-  clearById: (id: string) => Promise<void>;
-  playIn: (id: string, i: number) => void;
-  playingPlaylist: string | null;
-};
-
-// foobar2000 names its scratch playlist "Default" (older) or "Default Playlist"
-export const isDefault = (title: string) => /^default( playlist)?$/i.test(title.trim());
-
-export const BASE = "http://localhost:8880";
 const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 const doFetch: typeof fetch = inTauri ? (tauriFetch as unknown as typeof fetch) : fetch;
 
@@ -54,10 +18,10 @@ const dbToLin = (db: number) => Math.max(0, Math.min(1, Math.pow(10, db / 40)));
 const linToDb = (v: number, min: number) => (v <= 0.001 ? min : Math.max(min, 40 * Math.log10(v)));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-export function useFoobar(base = BASE): PlayerView {
+export function useFoobarBackend(base = BASE): PlayerBackend {
   const [connected, setConnected] = useState(false);
   const [status, setStatus] = useState("Đang chờ foobar2000…");
-  const [state, setState] = useState<PlayerView["state"]>("stopped");
+  const [state, setState] = useState<PlayerBackend["state"]>("stopped");
   const [track, setTrack] = useState<Track | null>(null);
   const [pos, setPos] = useState(0);
   const [dur, setDur] = useState(0);
@@ -253,3 +217,6 @@ export function useFoobar(base = BASE): PlayerView {
     playingPlaylist: active.pl,
   };
 }
+
+// Backward-compat alias: callers that used `useFoobar` keep working.
+export const useFoobar = useFoobarBackend;

@@ -1,5 +1,5 @@
 import { useRef } from "react";
-import type { PlayerView } from "./player";
+import type { PlayerView } from "./backend/PlayerBackend";
 
 // Geometry (SVG units). Original design: cream aluminium plinth, smoked lid hinges, straight arm.
 const W = 640, H = 500;

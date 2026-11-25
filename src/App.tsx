@@ -5,7 +5,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open as pick } from "@tauri-apps/plugin-dialog";
 import { Turntable } from "./Turntable";
-import { isDefault, useFoobar } from "./player";
+import { isDefault } from "./backend/PlayerBackend";
+import { useFoobar } from "./backend/FoobarBackend";
 
 const store = {
   get: (k: string, d: string) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } },
