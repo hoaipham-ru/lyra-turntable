@@ -1,0 +1,34 @@
+[workspace]
+resolver = "2"
+members = [
+    "src-tauri",
+    "crates/lyra-core",
+    "crates/lyra-decode",
+    "crates/lyra-dsd",
+    "crates/lyra-output",
+    "crates/lyra-engine",
+    "crates/lyra-library",
+    "crates/lyra-plugin",
+    "tools/lyra-probe",
+    "tools/lyra-play",
+]
+
+# Shared metadata for the Lyra crates. `src-tauri` keeps its own package
+# fields (name/version 0.3.0) and does not inherit these.
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/hoaipham-ru/lyra-turntable"
+
+# Dependencies shared across Lyra crates. Kept minimal on purpose; agents add
+# their own crate-specific deps and promote a dep here only when it is shared.
+[workspace.dependencies]
+thiserror = "2"
+
+# Profiles are only honored at the workspace root (a profile in a member is
+# ignored with a warning). The release profile moved here from `src-tauri`.
+[profile.release]
+lto = "thin"
+opt-level = "s"
+strip = true

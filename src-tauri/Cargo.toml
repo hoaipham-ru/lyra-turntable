@@ -18,7 +18,6 @@ tauri-plugin-dialog = "2"
 tauri-plugin-single-instance = "2"
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
 
-[profile.release]
-lto = "thin"
-opt-level = "s"
-strip = true
+# NOTE: the `[profile.release]` section moved to the workspace root Cargo.toml.
+# Profiles declared in a workspace member are ignored (with a warning), so it
+# must live at the root to take effect.
