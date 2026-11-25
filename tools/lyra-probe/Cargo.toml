@@ -4,5 +4,17 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+description = "Lyra QA probe: decode/hash/compare CLI for foobar2000 parity testing (S09)."
+
+[[bin]]
+name = "lyra-probe"
+path = "src/main.rs"
 
 [dependencies]
+lyra-core = { path = "../../crates/lyra-core" }
+clap = { version = "4", features = ["derive"] }
+sha2 = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+hex = "0.4"
