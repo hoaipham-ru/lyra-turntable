@@ -168,6 +168,7 @@ fn register_open_with() {
     reg(&["add", &cmd_key, "/ve", "/d", &cmd, "/f"]);
     let app_key = format!(r"HKCU\Software\Classes\Applications\{exe_file}");
     reg(&["add", &app_key, "/v", "FriendlyAppName", "/d", APP_NAME, "/f"]);
+    reg(&["add", &format!(r"{app_key}\DefaultIcon"), "/ve", "/d", &icon, "/f"]);
     reg(&["add", &format!(r"{app_key}\shell\open\command"), "/ve", "/d", &cmd, "/f"]);
     for ext in AUDIO_EXT {
         reg(&["add", &format!(r"HKCU\Software\Classes\.{ext}\OpenWithProgids"), "/v", "Lyra.Audio", "/t", "REG_NONE", "/f"]);
