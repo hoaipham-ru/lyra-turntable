@@ -7,6 +7,17 @@
 //!   PCM streams, with first differing frame, max abs diff and null depth (dB).
 //! - `align`, `capture`, `meta`, `mute` — stubs; implemented in later phases.
 //!
+//! # Exit-code contract
+//! Gating scripts and CI depend on these codes being distinct:
+//! - `0` — success: `decode` ran, or `compare` found the streams within tolerance.
+//! - `1` — `compare` mismatch: the streams differ beyond the chosen tolerance.
+//! - `2` — stub / not-implemented subcommand.
+//! - `3` — harness or internal error (ffmpeg/ffprobe missing, decode failure,
+//!   unsupported format, I/O error, …). The streams were *not* compared.
+//!
+//! Reserving `1` for a genuine compare mismatch lets a caller tell "streams
+//! differ" apart from "the probe broke".
+//!
 //! See `testing/TEST-STRATEGY.md` §4 (parity criteria) and §9 (report format).
 
 mod compare;
@@ -124,7 +135,10 @@ fn main() -> ExitCode {
         Ok(code) => code,
         Err(e) => {
             eprintln!("lyra-probe error: {e:#}");
-            ExitCode::FAILURE
+            // Exit code 3: a harness/internal error, distinct from a compare
+            // mismatch (1) so gating scripts can tell "the probe broke" apart
+            // from "the streams differ". See the module exit-code contract.
+            ExitCode::from(3)
         }
     }
 }
@@ -158,7 +172,7 @@ fn cmd_decode(args: &DecodeArgs) -> Result<ExitCode> {
         let bytes = match args.format {
             OutFormat::Raw => decoded.pcm.clone(),
             OutFormat::Wav => {
-                let mut w = ffmpeg::wav_header(&spec, decoded.pcm.len());
+                let mut w = ffmpeg::wav_header(&spec, decoded.pcm.len())?;
                 w.extend_from_slice(&decoded.pcm);
                 w
             }
@@ -215,7 +229,7 @@ fn load_stream(path: &Path, args: &CompareArgs) -> Result<Loaded> {
         let channels = args.channels.context("raw input needs --channels")?;
         let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
         Ok(Loaded {
-            samples: pcm::unpack(&bytes, fmt, bits),
+            samples: pcm::unpack(&bytes, fmt, bits)?,
             bits,
             channels,
             source: format!("{} ({}, {}-bit, {}ch)", path.display(), format_name(fmt), bits, channels),
@@ -225,7 +239,7 @@ fn load_stream(path: &Path, args: &CompareArgs) -> Result<Loaded> {
         let spec: PcmSpec = decoded.spec;
         let bits = args.bits.unwrap_or(u32::from(spec.bits_valid));
         Ok(Loaded {
-            samples: pcm::unpack(&decoded.pcm, spec.format, bits),
+            samples: pcm::unpack(&decoded.pcm, spec.format, bits)?,
             bits,
             channels: spec.channels,
             source: format!(
@@ -283,8 +297,9 @@ fn cmd_compare(args: &CompareArgs) -> Result<ExitCode> {
     });
     println!("{}", serde_json::to_string_pretty(&report)?);
 
-    // Exit non-zero when the streams are not a match at the chosen tolerance,
-    // so scripts and CI can gate on it.
+    // Exit-code contract: 0 = match, 1 = genuine mismatch (streams differ beyond
+    // tolerance). Harness errors never reach here — they exit 3 via main's Err
+    // arm — so a caller can distinguish "streams differ" from "the probe broke".
     if result.within_tolerance {
         Ok(ExitCode::SUCCESS)
     } else {

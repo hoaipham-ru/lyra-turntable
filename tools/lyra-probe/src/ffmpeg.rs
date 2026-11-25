@@ -140,15 +140,32 @@ pub fn decode_raw(input: &Path) -> Result<Decoded> {
 }
 
 /// Build a canonical 44-byte WAV header for the given spec and payload length.
-#[must_use]
-pub fn wav_header(spec: &PcmSpec, data_len: usize) -> Vec<u8> {
+///
+/// # Errors
+/// A canonical WAV header stores the `data` chunk size and the `RIFF` size as
+/// 32-bit little-endian fields. Returns an error if `data_len` (or `data_len +
+/// 36`) does not fit in a `u32`, rather than silently truncating/wrapping and
+/// emitting a corrupt header for a payload >= 4 GiB.
+pub fn wav_header(spec: &PcmSpec, data_len: usize) -> Result<Vec<u8>> {
+    let data_len_u32 = u32::try_from(data_len).map_err(|_| {
+        anyhow!(
+            "WAV payload too large for a 32-bit `data` chunk: {data_len} bytes (max {})",
+            u32::MAX
+        )
+    })?;
+    let riff_len = data_len_u32.checked_add(36).ok_or_else(|| {
+        anyhow!(
+            "WAV payload too large for a 32-bit `RIFF` size: {data_len} bytes (max {})",
+            u32::MAX - 36
+        )
+    })?;
     let channels = u32::from(spec.channels);
     let container_bits = pcm::container_bits(spec.format);
     let block_align = channels * (container_bits / 8);
     let byte_rate = spec.rate * block_align;
     let mut h = Vec::with_capacity(44);
     h.extend_from_slice(b"RIFF");
-    h.extend_from_slice(&((36 + data_len as u32).to_le_bytes()));
+    h.extend_from_slice(&riff_len.to_le_bytes());
     h.extend_from_slice(b"WAVE");
     h.extend_from_slice(b"fmt ");
     h.extend_from_slice(&16u32.to_le_bytes()); // PCM fmt chunk size
@@ -159,6 +176,6 @@ pub fn wav_header(spec: &PcmSpec, data_len: usize) -> Vec<u8> {
     h.extend_from_slice(&(block_align as u16).to_le_bytes());
     h.extend_from_slice(&(container_bits as u16).to_le_bytes());
     h.extend_from_slice(b"data");
-    h.extend_from_slice(&(data_len as u32).to_le_bytes());
-    h
+    h.extend_from_slice(&data_len_u32.to_le_bytes());
+    Ok(h)
 }

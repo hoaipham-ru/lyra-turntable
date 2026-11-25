@@ -76,6 +76,24 @@ foreach ($d in @($LibflacDir, $FfmpegDir, $ManifestDir)) {
     if (-not (Test-Path $d)) { New-Item -ItemType Directory -Force -Path $d | Out-Null }
 }
 
+# The corpus is read-only (ADR-006). Every path we are about to WRITE must be
+# proven to live outside it; refuse loudly otherwise. Resolve the corpus root
+# once (null if it does not exist - then there is nothing to protect).
+$CorpusRootResolved = if (Test-Path -LiteralPath $CorpusRoot) {
+    (Resolve-Path -LiteralPath $CorpusRoot).Path
+} else { $null }
+function Assert-OutsideCorpus([string]$OutPath) {
+    if (-not $CorpusRootResolved) { return }
+    $full = [System.IO.Path]::GetFullPath($OutPath)
+    $root = $CorpusRootResolved.TrimEnd('\') + '\'
+    if ($full.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing to write inside the read-only corpus (ADR-006): '$full' is under '$CorpusRootResolved'."
+    }
+}
+# Our output roots are static - assert them up front so a misconfigured
+# -CorpusRoot can never alias target/parity/**.
+foreach ($d in @($LibflacDir, $FfmpegDir, $Fb2kDir, $ManifestDir)) { Assert-OutsideCorpus $d }
+
 # Run a native exe without PS turning its stderr into a terminating error
 # (PowerShell 5.1 does that under ErrorActionPreference='Stop'). Returns the
 # process exit code; stderr is discarded.
@@ -194,10 +212,9 @@ Write-Host "golden.ps1: processing $($targets.Count) file(s)" -ForegroundColor C
 $entries = @()
 foreach ($src in $targets) {
     $full = (Resolve-Path -LiteralPath $src).Path
-    # Guard: never write into the corpus.
-    if ($full.StartsWith((Resolve-Path $CorpusRoot).Path, [StringComparison]::OrdinalIgnoreCase)) {
-        # read-only source, fine; our outputs go under $GoldenRoot
-    }
+    # NB: $full is an INPUT and may legitimately sit inside the read-only corpus;
+    # we only read it. The write guard (Assert-OutsideCorpus) is applied to each
+    # OUTPUT path below, never to the source.
     $item = Get-Item -LiteralPath $full
     $ext = $item.Extension.ToLower()
     $isFlac = $ext -eq '.flac'
@@ -214,6 +231,7 @@ foreach ($src in $targets) {
     $ffHash = $null
     $note   = $null
     $ffRaw  = Join-Path $FfmpegDir "$safe.raw"
+    Assert-OutsideCorpus $ffRaw
     if ($Force -or -not (Test-Path $ffRaw)) {
         $rc = Invoke-Native $ffmpeg @('-v', 'error', '-nostdin', '-y', '-i', $full, '-map', 'a:0', '-c:a', "pcm_$fmt", '-f', $fmt, '--', $ffRaw)
         if ($rc -ne 0) {
@@ -234,6 +252,7 @@ foreach ($src in $targets) {
     $libHash = $null
     if ($isFlac) {
         $libRaw = Join-Path $LibflacDir "$safe.raw"
+        Assert-OutsideCorpus $libRaw
         if ($Force -or -not (Test-Path $libRaw)) {
             $rc = Invoke-Native $flac @('-d', '--force-raw-format', '--endian=little', '--sign=signed', '-f', '-o', $libRaw, '--', $full)
             if ($rc -ne 0) { throw "flac failed on $full (exit $rc)" }
@@ -296,6 +315,7 @@ $manifest = [pscustomobject][ordered]@{
 
 $stamp        = (Get-Date).ToString('yyyyMMdd')
 $manifestPath = Join-Path $ManifestDir "golden-$stamp.json"
+Assert-OutsideCorpus $manifestPath
 $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
 
 Write-Host "golden.ps1: wrote manifest $manifestPath" -ForegroundColor Cyan
