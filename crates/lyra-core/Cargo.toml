@@ -7,3 +7,4 @@ repository.workspace = true
 description = "S01 — shared contracts: core audio types, traits, events and errors for Lyra Engine"
 
 [dependencies]
+thiserror.workspace = true
