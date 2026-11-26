@@ -26,6 +26,7 @@
 
 mod compare;
 mod dsd;
+mod dsd_hash;
 mod engine;
 mod ffmpeg;
 mod mute;
@@ -75,6 +76,14 @@ struct DsdArgs {
 enum DsdCommands {
     /// Re-container an uncompressed DFF as DSF (identical DSD, bit order flipped).
     Convert(ConvertArgs),
+    /// Hash a DSF/DFF file's DSD bytes (native + MSB-first canonical) for parity.
+    Hash(HashArgs),
+}
+
+#[derive(Parser)]
+struct HashArgs {
+    /// Input DSF or DFF file.
+    input: PathBuf,
 }
 
 #[derive(Parser)]
@@ -250,6 +259,7 @@ fn cmd_dsd(args: &DsdArgs) -> Result<ExitCode> {
                 .unwrap_or_else(|| dsd::default_fixture_path(&c.input));
             dsd::run_convert(&c.input, &output)
         }
+        DsdCommands::Hash(h) => dsd_hash::run_hash(&h.input),
     }
 }
 
