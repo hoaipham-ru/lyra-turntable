@@ -10,6 +10,7 @@ description = "S05 — Lyra playback engine: transport, queue, position clock an
 lyra-core = { path = "../lyra-core" }
 lyra-decode = { path = "../lyra-decode" }
 lyra-dsd = { path = "../lyra-dsd" }
+lyra-library = { path = "../lyra-library" }
 lyra-output = { path = "../lyra-output" }
 crossbeam-channel = "0.5"
 

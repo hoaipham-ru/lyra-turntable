@@ -9,7 +9,13 @@
 //! values. Padding into the device container happens before `push` (off the
 //! real-time render thread), exactly as `lyra-play` does it.
 
-use lyra_core::{OutputMode, Result, StreamSpec};
+use std::fs::File;
+use std::io::{BufWriter, Write};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+
+use lyra_core::{LyraError, OutputMode, PcmSpec, Result, SampleFormat, StreamSpec};
 use lyra_output::{DeviceId, OutputOptions};
 
 /// A live output stream the worker pushes device-format bytes into.
@@ -51,6 +57,80 @@ pub(crate) fn wasapi_sink_factory(
     opts: OutputOptions,
 ) -> SinkFactory {
     Box::new(move |spec: &StreamSpec| real::open(&device, spec, mode, opts.clone()))
+}
+
+/// Build an **offline** sink factory: no audio device is opened; every device-format
+/// byte the worker would push is written to `path` (continuously across gapless
+/// joins) and consumed instantly. This is the headless, silent bit-perfect capture
+/// path for QA — the bytes are exactly what a real device tap would record, so the
+/// file compares against the golden decode directly (ADR-004).
+pub(crate) fn offline_sink_factory(path: PathBuf) -> Result<SinkFactory> {
+    let file = File::create(&path)
+        .map_err(|e| LyraError::Io(format!("creating offline tap {}: {e}", path.display())))?;
+    let writer = Arc::new(Mutex::new(BufWriter::new(file)));
+    Ok(Box::new(move |spec: &StreamSpec| -> Result<Box<dyn AudioSink>> {
+        let pcm = match spec {
+            StreamSpec::Pcm(p) => *p,
+            StreamSpec::Dsd(_) => {
+                return Err(LyraError::Device(
+                    "offline sink carries PCM/DoP frames, not a raw DSD spec".into(),
+                ))
+            }
+        };
+        Ok(Box::new(OfflineSink {
+            spec: *spec,
+            pcm,
+            writer: writer.clone(),
+            played: Arc::new(AtomicU64::new(0)),
+        }))
+    }))
+}
+
+/// An [`AudioSink`] that writes device bytes to a shared file instead of a device.
+struct OfflineSink {
+    spec: StreamSpec,
+    pcm: PcmSpec,
+    writer: Arc<Mutex<BufWriter<File>>>,
+    played: Arc<AtomicU64>,
+}
+
+impl AudioSink for OfflineSink {
+    fn negotiated(&self) -> StreamSpec {
+        // No container widening offline: the worker pads source → this same spec
+        // (identity), so the file holds source-format bytes for a direct compare.
+        self.spec
+    }
+
+    fn is_bit_perfect(&self) -> bool {
+        // The offline file records bytes unaltered; whether the *source* path is
+        // bit-perfect is decided by the delivery (DSD→PCM sets `processed`).
+        !matches!(self.pcm.format, SampleFormat::F32)
+    }
+
+    fn push(&mut self, bytes: &[u8]) -> usize {
+        let bpf = self.pcm.bytes_per_frame().max(1);
+        let whole = (bytes.len() / bpf) * bpf;
+        if whole > 0 {
+            let mut w = self.writer.lock().expect("offline writer");
+            if w.write_all(&bytes[..whole]).is_err() {
+                return 0;
+            }
+            self.played.fetch_add((whole / bpf) as u64, Ordering::Relaxed);
+        }
+        whole
+    }
+
+    fn frames_played(&self) -> u64 {
+        self.played.load(Ordering::Relaxed)
+    }
+
+    fn underruns(&self) -> u64 {
+        0
+    }
+
+    fn device_lost(&self) -> bool {
+        false
+    }
 }
 
 #[cfg(windows)]

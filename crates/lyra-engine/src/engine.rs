@@ -1,5 +1,7 @@
 //! Engine construction: spawn the control and worker threads and wire the channels.
 
+use std::time::Duration;
+
 use crossbeam_channel::Receiver;
 use lyra_core::{EngineEvent, Result};
 use lyra_output::OutputOptions;
@@ -7,8 +9,8 @@ use lyra_output::OutputOptions;
 use crate::config::EngineConfig;
 use crate::control::{self, ControlMsg};
 use crate::handle::EngineHandle;
-use crate::sink::{wasapi_sink_factory, SinkFactory};
-use crate::source::{real_source_factory, SourceFactory};
+use crate::sink::{offline_sink_factory, wasapi_sink_factory, SinkFactory};
+use crate::source::{real_source, SourceBox};
 use crate::worker::{self, WorkerCmd, WorkerEvt};
 
 /// The entry point to the playback engine.
@@ -38,25 +40,30 @@ impl Engine {
             tap_path: config.tap_path.clone(),
             allow_poll_fallback: config.allow_poll_fallback,
         };
-        let source = real_source_factory(config.device.clone(), config.mode);
-        let sink = wasapi_sink_factory(config.device.clone(), config.mode, opts);
-        Ok(Self::spawn(source, sink))
+        let source = real_source(config.device.clone(), config.mode);
+        let sink = match &config.offline {
+            Some(path) => offline_sink_factory(path.clone())?,
+            None => wasapi_sink_factory(config.device.clone(), config.mode, opts),
+        };
+        Ok(Self::spawn(source, sink, config.gapless_preroll))
     }
 
     /// Construct with injected source/sink factories (used by tests to drive the
     /// transport against in-memory fakes, no audio and no hardware).
     #[cfg(test)]
     pub(crate) fn with_factories(
-        source: SourceFactory,
+        source: SourceBox,
         sink: SinkFactory,
+        preroll: Duration,
     ) -> (EngineHandle, Receiver<EngineEvent>) {
-        Self::spawn(source, sink)
+        Self::spawn(source, sink, preroll)
     }
 
     /// Shared spawn path: create the channels and the two threads.
     fn spawn(
-        source: SourceFactory,
+        source: SourceBox,
         sink: SinkFactory,
+        preroll: Duration,
     ) -> (EngineHandle, Receiver<EngineEvent>) {
         let (event_tx, event_rx) = crossbeam_channel::unbounded::<EngineEvent>();
         let (control_tx, control_rx) = crossbeam_channel::unbounded::<ControlMsg>();
@@ -65,7 +72,7 @@ impl Engine {
 
         let worker_join = std::thread::Builder::new()
             .name("lyra-decode-worker".into())
-            .spawn(move || worker::run(wevt_tx, wcmd_rx, sink, source))
+            .spawn(move || worker::run(wevt_tx, wcmd_rx, sink, source, preroll))
             .expect("spawn decode worker");
 
         let control_join = std::thread::Builder::new()

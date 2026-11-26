@@ -12,5 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 lyra-core = { path = "../../crates/lyra-core" }
+lyra-engine = { path = "../../crates/lyra-engine" }
 lyra-output = { path = "../../crates/lyra-output" }
 clap = { version = "4", features = ["derive"] }
+crossbeam-channel = "0.5"

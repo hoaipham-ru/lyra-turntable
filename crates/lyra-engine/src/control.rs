@@ -6,10 +6,11 @@
 //! and [`WorkerEvt`] from the decode worker. Because it only sends short messages
 //! (never decodes or touches the device), commands are never blocked by I/O.
 
+use std::path::Path;
 use std::thread::JoinHandle;
 
 use crossbeam_channel::{Receiver, Sender};
-use lyra_core::{EngineCommand, EngineEvent, LyraError, PlayState};
+use lyra_core::{EngineCommand, EngineEvent, LyraError, PlayState, TrackRef};
 
 use crate::worker::{WorkerCmd, WorkerEvt};
 
@@ -72,7 +73,7 @@ impl Control {
     fn command(&mut self, cmd: EngineCommand) {
         match cmd {
             EngineCommand::SetQueue(queue) => {
-                self.queue = queue;
+                self.queue = expand_queue(queue);
                 self.index = 0;
                 if self.state != PlayState::Stopped {
                     self.worker_tx.send(WorkerCmd::Stop).ok();
@@ -127,6 +128,20 @@ impl Control {
                     self.set_state(PlayState::Playing);
                 }
             }
+            WorkerEvt::Advanced { info, source, device, bit_perfect, spec_changed } => {
+                // The worker crossed the gapless join to the pre-loaded next entry.
+                if self.index + 1 < self.queue.len() {
+                    self.index += 1;
+                }
+                self.emit(EngineEvent::Track(info));
+                // A same-spec join keeps the device open, so Format is re-emitted
+                // only when the device was actually re-opened for a new spec.
+                if spec_changed {
+                    self.emit(EngineEvent::Format { source, device, bit_perfect });
+                }
+                // Playback continues; arm the following entry for the next join.
+                self.arm_preload();
+            }
             WorkerEvt::OpenFailed(err) => {
                 self.emit(EngineEvent::Error(err));
                 self.on_track_failed();
@@ -155,7 +170,17 @@ impl Control {
         let track = self.queue[index].clone();
         self.worker_tx.send(WorkerCmd::Load(track)).ok();
         self.worker_tx.send(WorkerCmd::Resume).ok();
+        // Arm the gapless pre-roll with the following entry now, before the worker
+        // pumps, so even a very short track has its successor ready at the join.
+        self.arm_preload();
         self.pending_play = true;
+    }
+
+    /// Arm the worker's gapless pre-roll with the entry after the current index,
+    /// or `None` when the current track is the last in the queue.
+    fn arm_preload(&mut self) {
+        let next = self.queue.get(self.index + 1).cloned();
+        self.worker_tx.send(WorkerCmd::PreloadNext(next)).ok();
     }
 
     /// Next/Prev movement within the queue.
@@ -211,4 +236,45 @@ impl Control {
     fn emit(&self, event: EngineEvent) {
         self.event_tx.send(event).ok();
     }
+}
+
+/// Expand any whole-cue entry (`subtrack: None`, a `.cue` path) into one
+/// [`TrackRef`] per virtual track, in sheet order.
+///
+/// This is the chosen convention for a bare `.cue` in the queue: "play all its
+/// virtual tracks in order". A `.cue` already carrying a `subtrack` is kept as the
+/// single virtual track it names; a non-cue entry is kept unchanged. A sheet that
+/// cannot be parsed is left as-is (the worker then surfaces the open error). The
+/// cue file is a small text read, not a decode, so it does not block on audio I/O.
+fn expand_queue(refs: Vec<TrackRef>) -> Vec<TrackRef> {
+    let mut out = Vec::with_capacity(refs.len());
+    for r in refs {
+        if r.subtrack.is_none() && is_cue_path(&r.path) {
+            match lyra_library::parse_cue(Path::new(&r.path)) {
+                Ok(sheet) => {
+                    let count = sheet.tracks().count();
+                    if count == 0 {
+                        out.push(r);
+                    } else {
+                        for i in 0..count {
+                            out.push(TrackRef { path: r.path.clone(), subtrack: Some(i as u32) });
+                        }
+                    }
+                }
+                Err(_) => out.push(r),
+            }
+        } else {
+            out.push(r);
+        }
+    }
+    out
+}
+
+/// `.cue` (case-insensitive) path test.
+fn is_cue_path(path: &str) -> bool {
+    Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("cue"))
+        .unwrap_or(false)
 }
