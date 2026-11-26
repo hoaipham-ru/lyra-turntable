@@ -28,3 +28,17 @@ parked (none affects correctness for the FLAC/WAV, 16/24-bit, exclusive/shared s
 | R5 | `tests/parity/p2_render.mjs:139` — treat source-rate rejection on a rate-limited endpoint as expected-skip, not `FAIL`, so the score reads correctly on ADR-010 48k-only hardware (did not trigger this run — the endpoints accepted all rates in exclusive). | lyra-qa |
 | R6 | `tests/parity/p2_render.mjs:106-130` — `alignedCompare` could absorb a start-of-stream underrun on tracks that begin with digital silence; cross-check `renderedFrames` against `frames_played`/underrun count. | lyra-qa |
 | R7 | `crates/lyra-decode/src/libflac.rs:20` — hardcoded user-specific winget `flac.exe` fallback path (behind `libflac-check` feature); prefer an env var. | lyra-decode |
+
+## P5 (DSD) reviewer follow-ups (non-blocking, 2026-11-26)
+
+`lyra-reviewer` found one **blocking** finding (B1, DFF/DSF parser overflow panic/hang) which was fixed and re-verified before P5 passed. These remaining nits were parked:
+
+| # | Item | Owner |
+|---|---|---|
+| P5-1 | `crates/lyra-dsd/src/dsf.rs` — after the B1 fix, consider a tighter cross-check of `sample_count` vs the de-blocked data layout (beyond the EOF/data-size clamp) for very odd headers. | lyra-dsd |
+| P5-2 | `crates/lyra-dsd/tests/readers.rs:267` — committed test hardcodes user-specific absolute `C:\SoulSeek_Music\complete\...` corpus paths (skips if absent). Source from a manifest/env var. | lyra-dsd / lyra-qa |
+| P5-3 | `crates/lyra-output/src/ring.rs:76` — `dop_idle` emits 24-in-32 idle frames, but DoP carrier negotiation prefers packed 24-in-3. When the real feeder is wired (pending-hardware), confirm idle frame size/justification matches the negotiated container or a DoP underrun pre-fill could desync. | lyra-output |
+| P5-4 | `crates/lyra-output/src/ring.rs:59` — DoP idle payload uses constant `0x69` for both DSD bytes rather than the canonical `0x69/0x96` alternation; verify a real DoP DAC reads it as silence (pending-hardware). | lyra-output |
+| P5-5 | `crates/lyra-output/src/asio_backend.rs:64/72/94` — `drivers()/probe()/open()` are `unimplemented!()` (feature-gated, off by default). Ensure the engine gates these behind a capability check before the hardware gate opens. | lyra-output |
+| P5-6 | `tools/lyra-probe/src/dsd.rs:62` — `guard_target_only` matches any path component literally named `target` (case-insensitive) without canonicalizing, so `<corpus>\target\x.dsf` would pass. Tighten to the repo `target/` and reject `..`. | lyra-probe / lyra-qa |
+| P5-7 | `crates/lyra-dsd` `DsdToPcm` runs the FIR at the full DSD rate; a polyphase decomposition would cut per-sample cost for real-time DSD256/512→PCM. Offline conversion and tests are fine as-is. | lyra-dsd |
