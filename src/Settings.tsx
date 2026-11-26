@@ -46,7 +46,9 @@ function maxRateKHz(d: DeviceDto): number | null {
   return Math.max(...d.exclusiveFormats.map((f) => f.rate)) / 1000;
 }
 
-export function Settings({ onClose }: { onClose: () => void }) {
+// `onBackendChange` lets App switch the live backend the moment the user flips the
+// radio (P4.5): no app restart needed. A restart still honours the saved choice.
+export function Settings({ onClose, onBackendChange }: { onClose: () => void; onBackendChange?: (b: Backend) => void }) {
   const [s, setS] = useState<AppSettings>(DEFAULTS);
   const [devices, setDevices] = useState<DeviceDto[]>([]);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -102,6 +104,7 @@ export function Settings({ onClose }: { onClose: () => void }) {
       /* storage unavailable */
     }
     if (inTauri) void invoke("settings_set", { settings: next }).catch(() => {});
+    if (patch.backend) onBackendChange?.(patch.backend);
   };
 
   return (

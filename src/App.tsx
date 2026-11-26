@@ -3,12 +3,13 @@ import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { open as pick } from "@tauri-apps/plugin-dialog";
+import { open as pick, save as pickSave } from "@tauri-apps/plugin-dialog";
 import { Turntable } from "./Turntable";
 import { Settings } from "./Settings";
 import { S } from "./strings";
 import { isDefault } from "./backend/PlayerBackend";
 import { useFoobar } from "./backend/FoobarBackend";
+import { useNativeBackend } from "./backend/NativeBackend";
 
 const store = {
   get: (k: string, d: string) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } },
@@ -30,10 +31,49 @@ const fbAdd = (paths: string[]) => invoke("fb_add", { paths });
 const fbCommand = (name: string) => invoke("fb_command", { name });
 const baseName = (p: string) => p.split(/[\\/]/).pop()!.replace(/\.[^.]+$/, "");
 
+// Which player drives the UI. Persisted by Settings.tsx (`settings_set` + the
+// `tt.settings` localStorage mirror); P4.5 reads it to pick the backend hook.
+type Backend = "foobar" | "native";
+const SETTINGS_KEY = "tt.settings"; // localStorage mirror of the Rust settings file
+// Synchronous first guess for the initial render (before the async `settings_get`
+// confirms it). Outside Tauri there is no Rust side, so this is the only source.
+const readBackendSync = (): Backend => {
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    if (raw && JSON.parse(raw).backend === "native") return "native";
+  } catch {
+    /* storage unavailable */
+  }
+  return "foobar";
+};
+
+// The Default-Playlist startup pass resolves this with the Default playlist id;
+// every open/add flow awaits it. Recreated on each backend switch so the new
+// backend runs its own pass.
+type Ready = { promise: Promise<string | null>; resolve: (id: string | null) => void };
+const makeReady = (): Ready => {
+  let resolve!: (id: string | null) => void;
+  return { promise: new Promise<string | null>((r) => (resolve = r)), resolve };
+};
+
 type Ask = { title: string; label: string; value: string; ok: string; done: (v: string) => void } | null;
 
 export default function App() {
-  const p = useFoobar();
+  // Backend switching (P4.5). We MOUNT BOTH hooks every render (React forbids
+  // conditional hooks) and pick which one drives the UI via `backend`. The
+  // "never two players" rule is enforced two ways:
+  //   1. Only the SELECTED backend `p` is ever sent transport/add commands. The
+  //      other backend merely polls/listens (FoobarBackend polls Beefweb; Native
+  //      listens to engine events) — neither makes sound unless commanded.
+  //   2. On every switch we actively STOP the backend we leave (pause foobar2000 /
+  //      `engine_shutdown` the native engine), so a track left playing can't keep
+  //      sounding once the other backend takes over.
+  const foobarP = useFoobar();
+  const nativeP = useNativeBackend();
+  const [backend, setBackend] = useState<Backend>(readBackendSync);
+  const p = backend === "native" ? nativeP : foobarP;
+  const backendRef = useRef(backend);
+  backendRef.current = backend;
   const [pinned, setPinned] = useState(false);
   const [menu, setMenu] = useState(false);
   const [ask, setAsk] = useState<Ask>(null);
@@ -49,6 +89,30 @@ export default function App() {
     setToast(t);
     setTimeout(() => setToast((x) => (x === t ? "" : x)), 2600);
   };
+
+  // Confirm the persisted backend choice from the Rust settings file (the initial
+  // render used the localStorage mirror). A restart thus honours the saved choice.
+  useEffect(() => {
+    if (!inTauri) return;
+    void invoke<{ backend?: string }>("settings_get")
+      .then((s) => setBackend(s?.backend === "native" ? "native" : "foobar"))
+      .catch(() => {});
+  }, []);
+
+  // On every backend switch, STOP the backend we are leaving so two players never
+  // produce sound at once (non-negotiable). Leaving foobar2000: pause it if it is
+  // playing. Leaving native: shut the engine down and release its device.
+  const prevBackend = useRef(backend);
+  useEffect(() => {
+    const from = prevBackend.current;
+    if (from === backend) return;
+    prevBackend.current = backend;
+    if (from === "foobar") {
+      if (foobarP.state === "playing") foobarP.playPause();
+    } else {
+      void invoke("engine_shutdown").catch(() => {});
+    }
+  }, [backend]);
 
   // Sidebar: the card slides out of a drawer tab on the turntable's right edge. Closed, the window shrinks
   // to the turntable so no transparent strip covers the desktop.
@@ -107,12 +171,15 @@ export default function App() {
 
   // Startup: make sure "Default Playlist" exists and is empty (unless the user filled it, or it is playing).
   // Everything that opens files waits for this, so files opened via "Open with" land in a clean Default.
-  const ready = useRef<{ promise: Promise<string | null>; resolve: (id: string | null) => void } | null>(null);
-  if (!ready.current) {
-    let resolve!: (id: string | null) => void;
-    ready.current = { promise: new Promise((r) => (resolve = r)), resolve };
-  }
+  const ready = useRef<Ready | null>(null);
+  if (!ready.current) ready.current = makeReady();
   const initDone = useRef(false);
+  // A backend switch starts a fresh Default-Playlist startup pass for the new one
+  // (reset BEFORE the init effect below, which runs right after in declared order).
+  useEffect(() => {
+    initDone.current = false;
+    ready.current = makeReady();
+  }, [backend]);
   useEffect(() => {
     if (!p.connected || initDone.current) return;
     initDone.current = true;
@@ -126,19 +193,30 @@ export default function App() {
       }
       ready.current!.resolve(d?.id ?? null);
     })();
-  }, [p.connected]);
+  }, [backend, p.connected]);
 
+  // Add `paths` to playlist `id` on the ACTIVE backend. foobar2000 adds via its
+  // /add switch to the current (= selected) playlist; the native store takes an
+  // explicit id. Both keep identical Default-Playlist semantics for callers.
+  const addToBackend = useCallback(async (id: string, paths: string[]) => {
+    if (backendRef.current === "native") {
+      if (!id) return;
+      await invoke("playlists_add", { id, paths });
+    } else {
+      await fbAdd(paths);
+    }
+  }, []);
   // "Mở" / "Open with": add to Default Playlist and play the first of the new songs
   const openPaths = useCallback(async (paths: string[]) => {
     if (!paths.length) return;
     const id = await ready.current!.promise;
-    if (!id) return say("Chưa nối được foobar2000");
+    if (!id) return say(S.backendNotReady);
     await pRef.current.selectPlaylist(id);
     const before = (await pRef.current.ensureDefault())?.count ?? 0;
-    await fbAdd(paths);
+    await addToBackend(id, paths);
     if (await pRef.current.waitForItems(before + 1)) pRef.current.playIn(id, before);
     say(`Đang phát trong Default Playlist`);
-  }, []);
+  }, [addToBackend]);
   // "Thêm": append to the playlist on screen; adding to Default by hand means "keep it next time"
   const addPaths = useCallback(async (paths: string[]) => {
     if (!paths.length) return;
@@ -146,10 +224,10 @@ export default function App() {
     const sel = pl.playlists.find((x) => x.id === pl.selected);
     if (sel && isDefault(sel.title)) store.set(TOUCHED, "1");
     const before = pl.list.length;
-    await fbAdd(paths);
+    await addToBackend(pl.selected ?? "", paths);
     await pRef.current.waitForItems(before + 1);
     say(`Đã thêm ${paths.length} mục vào ${sel?.title ?? "playlist"}`);
-  }, []);
+  }, [addToBackend]);
   const clearShown = () => {
     const sel = p.playlists.find((x) => x.id === p.selected);
     if (sel && isDefault(sel.title)) store.set(TOUCHED, "0");
@@ -180,8 +258,18 @@ export default function App() {
         await addPaths([r]);
       }
     },
-    savePlaylist: () => fbCommand("Save playlist..."),
-    preferences: () => fbCommand("Preferences"),
+    savePlaylist: async () => {
+      // foobar2000 opens its own Save dialog; native exports the shown playlist to m3u8.
+      if (backendRef.current !== "native") return void fbCommand("Save playlist...");
+      const id = pRef.current.selected;
+      if (!id) return;
+      const dest = await pickSave({ title: S.savePlaylistTitle, filters: [{ name: "Playlist", extensions: ["m3u8"] }] });
+      if (typeof dest === "string") {
+        await invoke("playlists_export_m3u", { id, path: dest }).catch(() => {});
+        say(S.playlistSaved);
+      }
+    },
+    preferences: () => fbCommand("Preferences"), // foobar2000-only; menu item hidden in native mode
     quit: () => invoke("quit_app"),
   };
   const items: ({ label: string; key?: string; run: () => unknown } | null)[] = [
@@ -193,8 +281,10 @@ export default function App() {
     { label: "Playlist mới", key: "Ctrl+N", run: actions.newPlaylist },
     { label: "Mở playlist…", run: actions.loadPlaylist },
     { label: "Lưu playlist…", key: "Ctrl+S", run: actions.savePlaylist },
-    null,
-    { label: "Cài đặt foobar2000", key: "Ctrl+P", run: actions.preferences },
+    // "Cài đặt foobar2000" (foobar2000 Preferences) only applies to the foobar backend.
+    ...(backend === "foobar"
+      ? ([null, { label: "Cài đặt foobar2000", key: "Ctrl+P", run: actions.preferences }] as const)
+      : []),
     null,
     { label: "Thoát", run: actions.quit },
   ];
@@ -243,7 +333,8 @@ export default function App() {
     const k = (e: KeyboardEvent) => {
       if (ask || settingsOpen) return;
       if (e.ctrlKey && !e.shiftKey && !e.altKey) {
-        const map: Record<string, () => unknown> = { o: actRef.current.open, u: actRef.current.addLocation, n: actRef.current.newPlaylist, s: actRef.current.savePlaylist, p: actRef.current.preferences };
+        const map: Record<string, () => unknown> = { o: actRef.current.open, u: actRef.current.addLocation, n: actRef.current.newPlaylist, s: actRef.current.savePlaylist };
+        if (backendRef.current === "foobar") map.p = actRef.current.preferences; // Ctrl+P: foobar2000 only
         const f = map[e.key.toLowerCase()];
         if (f) { e.preventDefault(); setMenu(false); void f(); }
         return;
@@ -295,7 +386,7 @@ export default function App() {
               </ul>
             )}
           </div>
-          <span className={"status " + (p.connected ? "ok" : "")} data-tauri-drag-region title={p.status}>{p.connected ? "foobar2000" : "đang chờ…"}</span>
+          <span className={"status " + (p.connected ? "ok" : "")} data-tauri-drag-region title={p.status}>{p.connected ? (backend === "native" ? "Lyra" : "foobar2000") : "đang chờ…"}</span>
           <div className="winbtns">
             <button className="wb" title={S.settingsBtn} aria-label={S.settingsBtn} onClick={() => setSettingsOpen(true)}>⚙</button>
             <button className={"wb " + (pinned ? "on" : "")} title={pinned ? "Bỏ ghim" : "Luôn nổi trên cùng"} aria-pressed={pinned}
@@ -306,7 +397,7 @@ export default function App() {
         </div>
 
         <p className="kicker">{p.state === "playing" ? "Đang quay" : p.state === "paused" ? "Tạm dừng" : "Đứng yên"}</p>
-        <h1 className="title">{p.track?.title || (p.connected ? "Chưa phát bài nào" : "Đang bật foobar2000…")}</h1>
+        <h1 className="title">{p.track?.title || (p.connected ? "Chưa phát bài nào" : backend === "native" ? S.engineStarting : "Đang bật foobar2000…")}</h1>
         {p.track && (p.track.artist || p.track.album) && <p className="artist">{[p.track.artist, p.track.album].filter(Boolean).join(" — ")}</p>}
 
         <div className="seekrow">
@@ -355,7 +446,7 @@ export default function App() {
 
       {dropping && <div className="dropzone">Thả vào để thêm vào playlist</div>}
 
-      {settingsOpen && <Settings onClose={() => setSettingsOpen(false)} />}
+      {settingsOpen && <Settings onClose={() => setSettingsOpen(false)} onBackendChange={setBackend} />}
 
       {ask && (
         <div className="modal" onClick={() => setAsk(null)}>
