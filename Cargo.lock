@@ -2478,6 +2478,11 @@ dependencies = [
 [[package]]
 name = "lyra-library"
 version = "0.1.0"
+dependencies = [
+ "lyra-core",
+ "lyra-decode",
+ "lyra-dsd",
+]
 
 [[package]]
 name = "lyra-output"

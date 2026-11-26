@@ -6,3 +6,6 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+lyra-core = { path = "../lyra-core" }
+lyra-decode = { path = "../lyra-decode" }
+lyra-dsd = { path = "../lyra-dsd" }
