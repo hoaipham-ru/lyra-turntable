@@ -28,15 +28,15 @@
 
 ## How it works
 
-Lyra is only the front end: decoding and audio output are still done by foobar2000. Lyra controls foobar2000 through **Beefweb** (a REST API on `localhost:8880`) and through foobar2000's command line.
+**Released app (0.3.0):** Lyra is the front end; decoding and audio output are done by foobar2000. Lyra controls foobar2000 through **Beefweb** (a REST API on `localhost:8880`) and through foobar2000's command line. Sections 1–5 describe this version.
+
+**In development: Lyra Engine.** A native Rust audio engine is replacing foobar2000, so that installing Lyra alone gives bit-perfect playback (see [section 7](#7-lyra-engine-in-development)). Until it is finished, the app keeps using foobar2000 through the `FoobarBackend`.
 
 - Tauri v2 (Rust + WebView2), React 18, TypeScript, Vite
 - Transparent, frameless window
-- Current version: **0.3.0**
+- Current release: **0.3.0** · engine target: **1.0** (FLAC + DSD, no foobar2000 needed)
 
 > The UI labels are in Vietnamese. This README quotes each label with its English meaning, e.g. **Tệp** (File).
-
-> Plan for replacing foobar2000 with a native engine: see [docs/PLAN-replace-foobar2000.md](docs/PLAN-replace-foobar2000.md).
 
 ---
 
@@ -160,27 +160,105 @@ SACD `.iso` is not in the *Open with* menu. Use **Tệp › Thêm file…** (Fil
 | Lyra is missing from *Open with* | Launch Lyra once (it registers on first run). Lyra never makes itself the default app |
 | The old icon still shows | Windows icon cache. Sign out and back in |
 | Clicks or dropouts in exclusive mode | Increase Buffer length, or use ASIO if your DAC has a driver |
-| DAC doesn't change sample rate | You are on DirectSound/Primary, or a resampler is in the DSP chain. Review section 3 |
+| DAC doesn't change sample rate | You are on DirectSound/Primary, or a resampler is in the DSP chain. Review section 3. On a laptop, also check which rates the built-in output accepts (section 7.3) |
+| Sound is "wider", louder or coloured | Windows *Audio enhancements* or *Spatial sound* (e.g. Dolby Atmos) is on. Turn both **Off** for the output device |
 
 ---
 
 ## 6. Project layout
 
 ```
-src/
-  App.tsx         window shell, File menu, playlists, drawer, window drag, Open-with
-  Turntable.tsx   SVG turntable (record, tonearm, keys, volume knob)
-  player.ts       useFoobar hook: Beefweb calls, polls state every second
+src/                     React UI
+  App.tsx                window shell, File menu, playlists, drawer, window drag, Open-with
+  Turntable.tsx          SVG turntable (record, tonearm, keys, volume knob)
+  backend/
+    PlayerBackend.ts     the interface the UI talks to (ADR-001)
+    FoobarBackend.ts     today's backend: Beefweb calls, polls foobar2000 every second
   styles.css
-src-tauri/
-  src/lib.rs      foobar2000 lifecycle, window hiding (Win32), tray,
-                  single instance, Open-with registration (HKCU)
-  tauri.conf.json
-  capabilities/default.json
+src-tauri/               Tauri app shell
+  src/lib.rs             foobar2000 lifecycle, window hiding (Win32), tray,
+                         single instance, Open-with registration (HKCU)
+  tauri.conf.json, capabilities/default.json
+crates/                  Lyra Engine (Rust, one crate per service)
+  lyra-core              shared types, traits, events (S01)
+  lyra-decode            FLAC/WAV decoding, sample-accurate seek (S02)        ✅ P1
+  lyra-output            WASAPI exclusive/shared output, device tap (S04)    ✅ P2 code
+  lyra-dsd               DSF/DFF, DoP, DSD→PCM (S03)                         ⏳ P5
+  lyra-engine            transport, queue, gapless, routing (S05)            ⏳ P3
+  lyra-library           tags, artwork, cue, playlists (S06)                 ⏳ P3/P4/P6
+  lyra-plugin            plugin ABI, foobar2000 bridge (S07)                 after 1.0
+tools/
+  lyra-probe             QA CLI: decode / compare / align / capture / meta / mute
+  lyra-play              headless player: --probe, --tap, exclusive/shared
+tests/parity/            QA harness vs foobar2000 (golden.ps1, run.ps1, p1.ps1, synth.ps1, fb2k_meta.ps1)
+.claude/agents/          the 10 lyra-* Claude Code subagents that build the engine
 docs/
-  PLAN-replace-foobar2000.md
-  images/         UI screenshots for this README
-  capture/        script that re-renders them (Playwright + mocked Beefweb)
+  images/, capture/      README screenshots and the script that re-renders them
+  BACKLOG-polish.md      small finishing touches, parked on purpose
+  PLAN-replace-foobar2000.md   first one-page plan (superseded, see section 7.4)
 ```
 
+`Cargo.toml` at the root is a workspace containing `src-tauri`, `crates/*` and `tools/*`.
+
 To refresh the screenshots after a UI change: run `npx vite --port 1420`, then `python docs/capture/capture.py` (needs `pip install playwright`; the script uses the Edge that ships with Windows, and ffmpeg to build the GIF). The album art and track list in the screenshots are sample data.
+
+---
+
+## 7. Lyra Engine (in development)
+
+### 7.1 Goal
+**1.0 = FLAC, WAV, DSF and DFF, played bit-perfect by Lyra alone, with no foobar2000
+installed.** Quality comes from three things Lyra does itself: an exact decoder
+(cross-checked against libFLAC, the decoder foobar2000 ships), an output path that
+never touches samples (WASAPI exclusive / ASIO), and correct DSD handling. Three DSD
+paths are chosen automatically from what the device supports: **native DSD over ASIO**,
+**DoP**, or **DSD→PCM**. Other formats (ALAC, MP3, AAC, Opus, APE…) and loading
+foobar2000 components come after 1.0.
+
+A bit-perfect engine can match foobar2000, not beat it; the goal is to *prove* it
+matches, file by file.
+
+### 7.2 Progress
+
+| Phase | What | Status |
+|---|---|---|
+| P0 | Workspace, contracts, test harness, golden references (82/82 corpus files) | ✅ passed |
+| P1 | FLAC + WAV decode | ✅ QA passed: **78/78 lossless files bit-identical** to libFLAC, exact lengths, broken-artwork files OK, no panics on corrupt input |
+| P2 | WASAPI exclusive output + device tap | 🔄 code merged, render tests and review pending |
+| P5 | DSD: DSF/DFF, DoP, native ASIO, DSD→PCM | ⏳ |
+| P3 | Engine: queue, gapless, seek, cue | ⏳ |
+| P4 | App alpha: native backend selectable in the UI, bit-perfect badge | ⏳ |
+| P6 | Metadata parity with foobar2000 | ⏳ |
+| P8 | Certification (parity, 2 h soak, runs without foobar2000) → **1.0** | ⏳ |
+
+### 7.3 Hardware notes
+Bit-perfect only works at rates the output device accepts. On the development laptop
+(built-in Senary codec): **Speakers accept only 48 kHz; Headphones accept 48 and
+96 kHz** (no 44.1). There, 48/96 kHz files play bit-perfect; other rates go through a
+high-quality resampler and the UI says so. 44.1/192 kHz bit-perfect and native DSD need
+an external USB DAC with an ASIO driver. Check your device in *Settings › System ›
+Sound › (device) › Properties › Format*, or run:
+
+```powershell
+cargo build --release -p lyra-play
+target\release\lyra-play.exe --probe      # lists every device's exclusive-mode formats
+```
+
+### 7.4 How it is built
+The engine is built by Claude Code subagents (`.claude/agents/lyra-*`), one per service,
+with an independent QA agent that compares every result with foobar2000 and a reviewer
+that gates each phase. The full plan (architecture, ADRs, phase files, test strategy,
+runbook) lives outside this repo in Hoai's `learning_code/lyra-engine` folder.
+
+Useful commands:
+
+```powershell
+cargo test --workspace                     # unit tests for all crates
+cargo clippy --workspace -- -D warnings
+target\release\lyra-probe.exe decode <file.flac>   # decode + SHA-256 + spec as JSON
+target\release\lyra-probe.exe compare <a> <b>      # bit-exact or tolerance compare
+tests\parity\run.ps1 -Phase P1             # parity suite for a phase → target\parity\reports\
+```
+
+The test corpus is read-only; generated audio, golden decodes and reports stay under
+`target/` and are never committed.
