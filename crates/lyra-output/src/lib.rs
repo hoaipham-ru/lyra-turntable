@@ -10,10 +10,17 @@
 //! - [`ring`] — the RT feeder's pull/underrun accounting (pure, unit-tested).
 //! - [`stats`] — atomic playback counters (the only state the RT thread writes).
 //! - [`tap`] — the device tap: a second lock-free ring copied to a file off-thread.
-//! - [`mock`] — an in-process fake [`lyra_core::OutputDevice`] for tests.
+//! - [`mock`] — an in-process fake [`lyra_core::OutputDevice`] for the WASAPI
+//!   paths (format negotiation, padding) in tests.
+//! - [`asio_mock`] — an in-process fake ASIO driver + [`lyra_core::OutputDevice`]
+//!   for the ASIO paths (native DSD, DoP-over-ASIO, plain PCM) in tests (P5.4).
 //! - `wasapi` (Windows only) — the real backend: enumeration, `IsFormatSupported`
 //!   probing, the event-driven exclusive stream with push-mode fallback, MMCSS
 //!   "Pro Audio", and the exclusive capture helper.
+//! - `asio` (Windows + `asio` feature + ASIO SDK only) — the real ASIO backend
+//!   via `asio-sys`. **Compiled out by default** (no SDK on this machine, ADR-009);
+//!   its behaviour is proven structurally plus through [`asio_mock`], and on real
+//!   hardware behind the pending-hardware human gate.
 //!
 //! # Real-time rules (PLAN §5, enforced by review)
 //! The feeder thread does **no allocation, no locking, no logging, no file I/O**
@@ -24,6 +31,7 @@
 
 #![cfg_attr(not(windows), allow(dead_code))]
 
+pub mod asio_mock;
 pub mod mock;
 pub mod negotiate;
 pub mod pad;
@@ -36,6 +44,12 @@ pub use negotiate::{negotiate_exclusive, ExclusiveFormat, Negotiated, PROBE_CAND
 pub use pad::pad_frames;
 pub use stats::{OutputStats, SharedStats};
 pub use types::{DeviceId, DeviceInfo, DeviceProbe, OutputOptions, PROBE_RATES};
+
+// Real ASIO backend: compiled only with the `asio` feature AND the ASIO SDK
+// present (via `CPAL_ASIO_DIR`). Off by default so the SDK-less workspace build
+// stays green (ADR-002 / ADR-009). See the module docs.
+#[cfg(all(windows, feature = "asio"))]
+mod asio_backend;
 
 #[cfg(windows)]
 mod handle;

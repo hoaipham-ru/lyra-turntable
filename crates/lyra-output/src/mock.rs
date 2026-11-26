@@ -94,9 +94,9 @@ impl OutputDevice for MockDevice {
                 self.negotiated = None;
                 Ok(StreamSpec::Pcm(mix))
             }
-            OutputMode::Asio { .. } => {
-                Err(LyraError::UnsupportedFormat("ASIO is a P5 feature".into()))
-            }
+            OutputMode::Asio { .. } => Err(LyraError::UnsupportedFormat(
+                "MockDevice is the WASAPI mock; use crate::asio_mock::AsioMockDevice for ASIO".into(),
+            )),
         }
     }
 
