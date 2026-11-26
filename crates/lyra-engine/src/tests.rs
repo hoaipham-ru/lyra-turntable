@@ -221,6 +221,13 @@ impl AudioSink for MockSink {
         self.pushed.fetch_add(accept, Ordering::Relaxed);
         accept_bytes
     }
+    fn flush(&mut self) {
+        // Model the ring emptying: collapse `pushed` onto what has already played
+        // so nothing stale remains buffered. `frames_played` (wall-clock capped by
+        // `pushed`) does not rewind.
+        let played = self.played_now();
+        self.pushed.store(played, Ordering::Relaxed);
+    }
     fn frames_played(&self) -> u64 {
         self.played_now()
     }
@@ -230,6 +237,131 @@ impl AudioSink for MockSink {
     fn device_lost(&self) -> bool {
         false
     }
+}
+
+/// Capacity of the test-controlled ring, in frames.
+const RING_CAP_FRAMES: u64 = 16_384;
+
+/// A device ring under explicit test control: pushed bytes sit buffered until the
+/// test [`consume`](RingState::consume)s them (moving them into the played record),
+/// and [`flush`](RingState::flush) drops whatever is still buffered *without*
+/// advancing `frames_played`. This models the real device/ring boundary that the
+/// offline sink cannot, so a seek's stale pre-seek tail is observable — the B1
+/// regression.
+struct RingState {
+    bpf: usize,
+    /// Pushed-but-unconsumed device bytes, FIFO (the ring contents).
+    buffer: Mutex<Vec<u8>>,
+    /// Bytes the device has "consumed" (played), in order.
+    played: Mutex<Vec<u8>>,
+    /// Frames consumed so far (== `frames_played`).
+    played_frames: AtomicU64,
+}
+
+impl RingState {
+    fn new(bpf: usize) -> Self {
+        Self {
+            bpf,
+            buffer: Mutex::new(Vec::new()),
+            played: Mutex::new(Vec::new()),
+            played_frames: AtomicU64::new(0),
+        }
+    }
+    fn buffered_frames(&self) -> u64 {
+        (self.buffer.lock().unwrap().len() / self.bpf) as u64
+    }
+    /// Push up to the ring's free space; return bytes accepted (back-pressure).
+    fn push(&self, bytes: &[u8]) -> usize {
+        let mut buf = self.buffer.lock().unwrap();
+        let in_ring = (buf.len() / self.bpf) as u64;
+        let space = RING_CAP_FRAMES.saturating_sub(in_ring);
+        let offered = (bytes.len() / self.bpf) as u64;
+        let accept = offered.min(space) as usize * self.bpf;
+        buf.extend_from_slice(&bytes[..accept]);
+        accept
+    }
+    /// Move up to `frames` from the front of the ring into the played record.
+    fn consume(&self, frames: u64) {
+        let mut buf = self.buffer.lock().unwrap();
+        let avail = (buf.len() / self.bpf) as u64;
+        let take = frames.min(avail) as usize * self.bpf;
+        let drained: Vec<u8> = buf.drain(..take).collect();
+        drop(buf);
+        self.played.lock().unwrap().extend_from_slice(&drained);
+        self.played_frames.fetch_add((take / self.bpf) as u64, Ordering::Relaxed);
+    }
+    /// Drop the buffered tail; `frames_played` is unchanged (the B1 contract:
+    /// discarded bytes were never played, so they were never counted).
+    fn flush(&self) {
+        self.buffer.lock().unwrap().clear();
+    }
+    fn played_record(&self) -> Vec<u8> {
+        self.played.lock().unwrap().clone()
+    }
+}
+
+/// An [`AudioSink`] over a shared [`RingState`], counting `flush` calls so a test
+/// can assert seek/stop/set-queue flush and pause does not.
+struct RingSink {
+    spec: StreamSpec,
+    state: Arc<RingState>,
+    flush_count: Arc<AtomicUsize>,
+}
+
+impl AudioSink for RingSink {
+    fn negotiated(&self) -> StreamSpec {
+        self.spec
+    }
+    fn is_bit_perfect(&self) -> bool {
+        true
+    }
+    fn push(&mut self, bytes: &[u8]) -> usize {
+        self.state.push(bytes)
+    }
+    fn flush(&mut self) {
+        self.flush_count.fetch_add(1, Ordering::Relaxed);
+        self.state.flush();
+    }
+    fn frames_played(&self) -> u64 {
+        self.state.played_frames.load(Ordering::Relaxed)
+    }
+    fn underruns(&self) -> u64 {
+        0
+    }
+    fn device_lost(&self) -> bool {
+        false
+    }
+}
+
+/// Build an engine over a single-track endless [`MockSource`] and a test-controlled
+/// [`RingSink`], returning the shared ring state and flush counter.
+fn ring_engine() -> (Arc<RingState>, Arc<AtomicUsize>, EngineHandle, Receiver<EngineEvent>) {
+    let opens = Arc::new(AtomicUsize::new(0));
+    let source: Box<dyn Source> =
+        Box::new(MockSource { table: HashMap::new(), default_total: None, opens });
+
+    let state = Arc::new(RingState::new(SPEC.bytes_per_frame()));
+    let flush_count = Arc::new(AtomicUsize::new(0));
+    let state_c = state.clone();
+    let flush_c = flush_count.clone();
+    let sink = Box::new(move |spec: &StreamSpec| -> Result<Box<dyn AudioSink>> {
+        Ok(Box::new(RingSink { spec: *spec, state: state_c.clone(), flush_count: flush_c.clone() }))
+    });
+
+    let (engine, rx) = Engine::with_factories(source, sink, TEST_PREROLL);
+    (state, flush_count, engine, rx)
+}
+
+/// Spin until `cond` holds or the timeout elapses; returns the final value.
+fn wait_until(timeout: Duration, mut cond: impl FnMut() -> bool) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if cond() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    cond()
 }
 
 /// Builder for an engine over fakes, capturing the open counts and recorded bytes.
@@ -721,6 +853,132 @@ fn seek_within_virtual_track_clamps_and_reports_relative() {
     assert!(
         clamped.iter().any(|e| matches!(e, EngineEvent::Position { frame } if *frame == 299_999)),
         "seek past the end clamps to the last frame of the window: {clamped:?}"
+    );
+
+    engine.shutdown();
+}
+
+// --- B1: flush the pre-seek/pre-stop tail -----------------------------------
+
+/// B1 regression: a seek drops the pre-seek tail still buffered in the device ring
+/// and the post-seek audio follows with no stale prefix. With a ring that only
+/// plays bytes when the test consumes them, the pre-seek tail is observable; before
+/// the worker flushed the sink on seek this tail would play before the landed
+/// audio (invisible to the offline sink, audible on a real device).
+#[test]
+fn seek_flushes_pre_seek_tail_from_ring() {
+    let bpf = SPEC.bytes_per_frame();
+    let (state, flush_count, engine, rx) = ring_engine();
+    engine.send(queue(&["a.flac"]));
+    engine.send(EngineCommand::Play);
+    collect_until(&rx, Duration::from_secs(1), |e| {
+        matches!(e, EngineEvent::State(PlayState::Playing))
+    });
+
+    // The worker fills the ring (nothing consumed yet); consume the first 1000
+    // frames so they count as played. The rest of the ring is the pre-seek tail.
+    assert!(
+        wait_until(Duration::from_secs(1), || state.buffered_frames() >= 1000),
+        "worker should fill the ring"
+    );
+    state.consume(1000);
+    assert!(
+        wait_until(Duration::from_secs(1), || state.buffered_frames() > 0),
+        "a pre-seek tail must be buffered for this test to mean anything"
+    );
+
+    // Seek well past the buffered tail.
+    engine.send(EngineCommand::Seek(500_000));
+    collect_until(&rx, Duration::from_secs(1), |e| {
+        matches!(e, EngineEvent::Position { frame } if *frame == 500_000)
+    });
+
+    // The seek flushed the ring (pre-seek tail dropped, never played).
+    assert!(flush_count.load(Ordering::Relaxed) >= 1, "seek must flush the sink");
+
+    // The worker refills from the seek target; consume and check the played stream
+    // jumps from the 1000 pre-seek frames straight to frame 500_000 — none of the
+    // dropped tail (which began at frame 1000) is in between.
+    assert!(
+        wait_until(Duration::from_secs(1), || state.buffered_frames() >= 1000),
+        "worker should refill from the seek target"
+    );
+    state.consume(1000);
+    let played = state.played_record();
+    assert_eq!(
+        &played[..1000 * bpf],
+        &pattern_bytes(SPEC, 0, 1000)[..],
+        "the first 1000 played frames are the pre-seek region"
+    );
+    let post = &played[1000 * bpf..];
+    assert!(!post.is_empty(), "post-seek bytes were consumed");
+    assert_eq!(
+        post[0],
+        (500_000u64 & 0xFF) as u8,
+        "post-seek bytes follow with no stale pre-seek tail (B1)"
+    );
+    // The dropped tail began at frame 1000, whose pattern byte differs — prove it
+    // is absent at the join.
+    assert_ne!(post[0], (1000u64 & 0xFF) as u8, "the stale tail (frame 1000) must not play");
+
+    engine.shutdown();
+}
+
+/// B1: Stop and SetQueue-while-playing flush the ring (device stays open), but
+/// Pause does not — pause keeps the buffered audio so resume is seamless.
+#[test]
+fn stop_and_set_queue_flush_but_pause_does_not() {
+    let (state, flush_count, engine, rx) = ring_engine();
+    engine.send(queue(&["a.flac"]));
+    engine.send(EngineCommand::Play);
+    collect_until(&rx, Duration::from_secs(1), |e| {
+        matches!(e, EngineEvent::State(PlayState::Playing))
+    });
+    assert!(
+        wait_until(Duration::from_secs(1), || state.buffered_frames() > 0),
+        "worker should buffer audio"
+    );
+
+    // Pause must NOT flush (resume stays seamless).
+    engine.send(EngineCommand::Pause);
+    collect_until(&rx, Duration::from_secs(1), |e| {
+        matches!(e, EngineEvent::State(PlayState::Paused))
+    });
+    assert_eq!(flush_count.load(Ordering::Relaxed), 0, "pause must not flush");
+
+    // Resume, then Stop must flush (device stays open).
+    engine.send(EngineCommand::Play);
+    collect_until(&rx, Duration::from_secs(1), |e| {
+        matches!(e, EngineEvent::State(PlayState::Playing))
+    });
+    engine.send(EngineCommand::Stop);
+    collect_until(&rx, Duration::from_secs(1), |e| {
+        matches!(e, EngineEvent::State(PlayState::Stopped))
+    });
+    // The worker handles Stop asynchronously (control emits Stopped first), so
+    // wait for the flush to land on the worker thread.
+    assert!(
+        wait_until(Duration::from_secs(1), || flush_count.load(Ordering::Relaxed) >= 1),
+        "stop must flush the ring"
+    );
+    let after_stop = flush_count.load(Ordering::Relaxed);
+
+    // Play again, then SetQueue while playing must flush (it routes through Stop).
+    engine.send(EngineCommand::Play);
+    collect_until(&rx, Duration::from_secs(1), |e| {
+        matches!(e, EngineEvent::State(PlayState::Playing))
+    });
+    assert!(
+        wait_until(Duration::from_secs(1), || state.buffered_frames() > 0),
+        "worker should buffer audio again"
+    );
+    engine.send(queue(&["x.flac", "y.flac"]));
+    collect_until(&rx, Duration::from_secs(1), |e| {
+        matches!(e, EngineEvent::State(PlayState::Stopped))
+    });
+    assert!(
+        wait_until(Duration::from_secs(1), || flush_count.load(Ordering::Relaxed) > after_stop),
+        "set-queue while playing must flush"
     );
 
     engine.shutdown();

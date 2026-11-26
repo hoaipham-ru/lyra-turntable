@@ -36,6 +36,17 @@ pub(crate) trait AudioSink: Send {
     /// Push device-format bytes into the ring, returning how many were accepted.
     fn push(&mut self, bytes: &[u8]) -> usize;
 
+    /// Discard every unplayed byte still buffered toward the device so the next
+    /// bytes pushed are the next thing it plays. The worker calls this on
+    /// seek/stop/set-queue (never on pause) to drop the stale pre-seek tail that
+    /// would otherwise play before the landed audio.
+    ///
+    /// Runs on the decode/worker thread and may block briefly (the real backend
+    /// hands off to its feeder thread and waits for the ring to drain); it must
+    /// never be called on a real-time render thread. Discarded frames were never
+    /// played, so `frames_played` does not rewind.
+    fn flush(&mut self);
+
     /// Frames the device has actually consumed since the stream opened.
     fn frames_played(&self) -> u64;
 
@@ -120,6 +131,14 @@ impl AudioSink for OfflineSink {
         whole
     }
 
+    fn flush(&mut self) {
+        // No-op: the offline sink consumes every pushed byte instantly and does
+        // not model the ring/device boundary, so an offline capture of a *seek*
+        // still contains the pre-seek region. Offline is the continuous-playback
+        // byte-equality proof (ADR-004), not a seek-realism proof — the stale
+        // real-device tail is exactly what `flush` drops on hardware.
+    }
+
     fn frames_played(&self) -> u64 {
         self.played.load(Ordering::Relaxed)
     }
@@ -157,6 +176,12 @@ mod real {
         fn push(&mut self, bytes: &[u8]) -> usize {
             let (_written, remainder) = self.handle.producer().push_partial_slice(bytes);
             bytes.len() - remainder.len()
+        }
+
+        fn flush(&mut self) {
+            // Discard the ring via the RT-safe producer→feeder handshake. Blocks
+            // on this (worker) thread until drained or the backend's timeout.
+            self.handle.flush();
         }
 
         fn frames_played(&self) -> u64 {
