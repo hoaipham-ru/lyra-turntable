@@ -75,3 +75,17 @@ badge and the volume lock all hold. These nits were parked:
 | P4-5 | `src-tauri/src/engine.rs:370` — a `Seek` issued before any `Track`/`Format` event uses `source_rate == 0`, silently seeking to frame 0. Clamp or ignore until a rate is known. | lyra-app |
 | P4-6 | `src/backend/NativeBackend.ts` — after `engine_shutdown` on a backend switch the hook keeps `connected === true` (stale); cosmetic, no sound/function impact. | lyra-app |
 | P4-7 | (carried from P3) truncated/corrupt mid-stream data still ends without an `EngineEvent::Error`. P4 forwards `Error` faithfully but the engine never emits one for mid-stream truncation. **Not worsened by P4** — remains the explicitly-deferred "fix in P4 or later" item. | lyra-engine |
+
+## P6 (library & metadata parity) reviewer follow-ups (non-blocking, 2026-11-26)
+
+`lyra-reviewer` returned **PASS with no blocking findings** for P6 (metadata/library — not the RT
+path). No write to the corpus or the foobar2000 profile, no SQL injection, no unsafe/panic/hang on
+untrusted input, no licence problem. These nits were parked:
+
+| # | Item | Owner |
+|---|---|---|
+| P6-N1 | `crates/lyra-library/src/cache.rs:332` — `stat()` stores mtime at whole-second granularity; a file retagged within the same second with unchanged byte size would be served stale. Matches the spec `(path, mtime, size)` key and retagging almost always changes size (low risk). Consider sub-second mtime if ever observed. | lyra-library |
+| P6-N2 | `crates/lyra-library/src/cache.rs:128` — a cached row whose *typed* columns fail to decode (reachable only via external DB tampering/schema skew) propagates an error out of `get_or_read` instead of falling back to a fresh file read. The `tags_json` blob is already tolerant; treat any row-decode error as a cache miss so a corrupt row can never poison a read. | lyra-library |
+| P6-N3 | `crates/lyra-library/src/playlists.rs:571` — `dir.join(format!("playlist-{guid}.fplite"))` does not validate `guid` from `index.txt`; a crafted guid containing `..\` could read an arbitrary `.fplite`-suffixed file. Read-only, user-owned, opt-in migration (low severity). Reject guids containing path separators. | lyra-library |
+| P6-N4 | `tools/lyra-probe/src/meta.rs:234` — DSD `length_samples` is the exact 1-bit DSD frame count, while foobar2000's SACD input reports the PCM-converted length. `p6.ps1` records this as a note and marks the fb2k diff pending-human, so it does not break P6. Define the DSD length comparison on a common unit before claiming length parity at P8 (DoD §6). | lyra-qa |
+| P6-N5 | `crates/lyra-library/src/playlists.rs:687` — `location_to_path` does no percent-decoding of `file://` locations, relying on the empirical finding that fb2k v2 writes raw Windows paths. Fine today; revisit if a percent-encoded location ever appears. | lyra-library |
