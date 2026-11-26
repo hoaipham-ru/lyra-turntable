@@ -378,6 +378,29 @@ impl Worker {
         self.carry.clear();
         self.pending.clear();
         self.pending_off = 0;
+        // Drop audio still queued toward the device so a resume or a new queue
+        // starts clean rather than replaying the stale tail (B1). A SetQueue
+        // while playing routes through Stop, so this covers it too. The device
+        // stays open; only its buffered bytes are discarded.
+        self.flush_sink();
+    }
+
+    /// Discard audio still buffered toward the device — both the ring (via
+    /// [`AudioSink::flush`]) and the worker's own un-pushed `pending` (cleared by
+    /// the caller) — so the next bytes pushed are the next thing the device plays.
+    ///
+    /// Called on seek/stop/set-queue, never on pause (pause keeps the buffer so
+    /// resume is seamless). Runs on the worker thread (may block up to the
+    /// backend's flush timeout), never on a real-time thread.
+    ///
+    /// The discarded ring frames never advance `frames_played`, so the append
+    /// point collapses onto the device's current played position: re-anchor
+    /// `ring_end_dev` there so any clock rebase that follows maps the landed
+    /// source frame to the very next frame the device will play.
+    fn flush_sink(&mut self) {
+        let Some(sink) = self.sink.as_mut() else { return };
+        sink.flush();
+        self.ring_end_dev = sink.frames_played();
     }
 
     fn seek(&mut self, frame: u64) {
@@ -407,8 +430,11 @@ impl Worker {
         self.eos = false;
         let landed_rel = landed_abs.saturating_sub(self.virtual_start);
         self.src_pos = landed_abs;
-        // New audio appends at the current ring end; the pre-seek tail already in
-        // the ring plays out first (lyra-output has no flush API — see handoff).
+        // Drop the pre-seek tail still queued toward the device (ring + pending)
+        // so the landed audio plays immediately instead of after the stale tail
+        // (B1). `flush_sink` re-anchors `ring_end_dev` to the device's current
+        // played position, so the rebase below stays correct.
+        self.flush_sink();
         self.seg_base_dev = self.ring_end_dev;
         self.clock.rebase(landed_rel, self.ring_end_dev);
         self.evt(WorkerEvt::Position(landed_rel));
