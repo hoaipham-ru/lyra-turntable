@@ -2381,6 +2381,9 @@ dependencies = [
 [[package]]
 name = "lyra-dsd"
 version = "0.1.0"
+dependencies = [
+ "lyra-core",
+]
 
 [[package]]
 name = "lyra-engine"
