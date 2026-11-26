@@ -42,3 +42,20 @@ parked (none affects correctness for the FLAC/WAV, 16/24-bit, exclusive/shared s
 | P5-5 | `crates/lyra-output/src/asio_backend.rs:64/72/94` — `drivers()/probe()/open()` are `unimplemented!()` (feature-gated, off by default). Ensure the engine gates these behind a capability check before the hardware gate opens. | lyra-output |
 | P5-6 | `tools/lyra-probe/src/dsd.rs:62` — `guard_target_only` matches any path component literally named `target` (case-insensitive) without canonicalizing, so `<corpus>\target\x.dsf` would pass. Tighten to the repo `target/` and reject `..`. | lyra-probe / lyra-qa |
 | P5-7 | `crates/lyra-dsd` `DsdToPcm` runs the FIR at the full DSD rate; a polyphase decomposition would cut per-sample cost for real-time DSD256/512→PCM. Offline conversion and tests are fine as-is. | lyra-dsd |
+
+## P3 (playback engine) reviewer follow-ups (non-blocking, 2026-11-26)
+
+`lyra-reviewer` raised one **blocking** finding (B1 — seek/stop/set-queue did not flush the
+`lyra-output` ring, so a stale pre-seek tail would play on a real device) which was fixed
+(new `OutputHandle::flush()` + engine wiring, ADR-013) and re-verified (B1 RESOLVED — PASS)
+before P3 passed. These remaining nits were parked (none affects the offline byte-exact proofs):
+
+| # | Item | Owner |
+|---|---|---|
+| P3-1 | `crates/lyra-engine/src/worker.rs` (pre-roll fail path) + `control.rs` — a gapless pre-open failure drains to `TrackEnded`, then control `start_index(index+1)` re-loads the same failed track once before `on_track_failed` skips it: redundant open + extra error event. Advance the index on the pre-roll failure path. | lyra-engine |
+| P3-2 | `crates/lyra-engine/src/control.rs` — the next-next preload is armed only after `Advanced` is received, so a track shorter than the control round-trip (<~50 ms) could hit EOS before its successor is armed, dropping the gapless join. Pathological for real audio. | lyra-engine |
+| P3-3 | `crates/lyra-engine/src/engine.rs` — unbounded event/command channels; ~10 Position events/s accumulate if a consumer stalls. Use a bounded channel or coalesce Position events. | lyra-engine |
+| P3-4 | `crates/lyra-engine/src/source.rs` — `Source::resolve` re-parses the cue sheet and re-probes the image on every same-image preload; cache per image key to avoid redundant worker-thread file I/O. | lyra-engine |
+| P3-5 | `crates/lyra-output/src/handle.rs` + `crates/lyra-engine/src/worker.rs` — timeout-then-service race: if the RT render thread is starved >500 ms, `flush()` times out, the worker rebases and pushes post-seek bytes, and the RT thread's next `service_flush` then drains those fresh bytes (req still > ack), dropping the start of landed audio until `pump()` refills. Only under a >500 ms RT stall. Fix: on a timed-out flush, defer pushes until `flush_ack` is observed, or carry an outstanding-flush generation. | lyra-output / lyra-engine |
+| P3-6 | `crates/lyra-output/src/wasapi_backend.rs` — `service_flush` is reached only after the device event wait; on repeated `wait_for_event` errors it is skipped via `continue`. Bounded in practice by the 500 ms flush timeout; add a comment that flush latency depends on event delivery. | lyra-output |
+| P3-7 | `crates/lyra-engine/src/sink.rs` — `OfflineSink::flush` is a deliberate no-op, so QA offline captures still contain the pre-seek region: a B1 regression would surface only in the `RingSink` unit test, not in offline byte-equality. Intentional/documented; flagged so QA does not rely on offline captures to catch a flush regression. | lyra-qa |
