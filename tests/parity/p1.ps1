@@ -35,7 +35,10 @@
 param(
     [string]$GoldenManifest,
     [int]$SeekPoints = 50,
-    [switch]$Quick
+    [switch]$Quick,
+    # Run seek parity on EVERY lossless file (P1 exit gate), not just one
+    # representative per rate/bit class. Decode-only and fast (ADR-012).
+    [switch]$SeekAll
 )
 
 $ErrorActionPreference = 'Stop'
@@ -193,7 +196,10 @@ foreach ($f in $lossless) {
 }
 
 # --- 3. seek parity --------------------------------------------------------
-if (-not $Quick) {
+if ($SeekAll -and -not $Quick) {
+    # P1 exit gate: seek on EVERY lossless file (FLAC + WAV).
+    $seekFiles = @($manifest.files | Where-Object { $_.ext -eq 'flac' -or $_.ext -eq 'wav' })
+} elseif (-not $Quick) {
     $classes = @{}  # one representative file per (bits,rateClass)
     foreach ($f in ($manifest.files | Where-Object { $_.ext -eq 'flac' })) {
         $rc = if ($f.sampleRate -le 48000) { 'lo' } else { 'hi' }
