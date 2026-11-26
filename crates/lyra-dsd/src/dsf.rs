@@ -83,9 +83,24 @@ fn parse(file: &mut File, file_len: u64) -> Result<Dsf> {
     }
     let data_chunk_size = le_u64(&head, 84)?; // includes the 12-byte chunk header
     let data_start = 92u64;
-    let _data_size = data_chunk_size.saturating_sub(12);
+    // Declared payload bytes, clamped to what the file actually holds (never trust
+    // the header): everything downstream sizes reads off this, not `sample_count`.
+    let declared = data_chunk_size.saturating_sub(12);
+    let available = file_len.saturating_sub(data_start);
+    let data_size = declared.min(available);
 
+    // DSF stores block-padded per-channel data, so each channel holds
+    // `data_size / channels` bytes on disk. Reject a `sample_count` that claims
+    // more audio than the data chunk can hold — otherwise the de-block offset math
+    // (bytes_per_channel × channels × block_size) could overflow / read past EOF.
+    let stored_per_channel = data_size / u64::from(channel_num);
     let bytes_per_channel = sample_count.div_ceil(8);
+    if bytes_per_channel > stored_per_channel {
+        return Err(LyraError::Decode(format!(
+            "DSF sample count {sample_count} exceeds data chunk \
+             ({data_size} bytes, {channel_num} ch, {stored_per_channel} bytes/ch)"
+        )));
+    }
 
     let metadata = if meta_ptr != 0 && meta_ptr < file_len {
         Some(MetadataRegion {
