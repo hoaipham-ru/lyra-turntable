@@ -2467,6 +2467,13 @@ dependencies = [
 [[package]]
 name = "lyra-engine"
 version = "0.1.0"
+dependencies = [
+ "crossbeam-channel",
+ "lyra-core",
+ "lyra-decode",
+ "lyra-dsd",
+ "lyra-output",
+]
 
 [[package]]
 name = "lyra-library"
