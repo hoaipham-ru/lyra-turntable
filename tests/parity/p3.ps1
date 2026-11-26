@@ -136,7 +136,15 @@ function Bytes-Per-Frame([int]$bits, [int]$channels) {
     return $bps * $channels
 }
 function Read-Region([string]$path, [int64]$offset, [int]$len) {
-    $fs = [System.IO.File]::OpenRead($path)
+    # Windows Defender / search indexer can hold a freshly-written render file for a
+    # few hundred ms, surfacing as "used by another process" on OpenRead. The byte
+    # content is final (the writer process has exited); retry briefly before failing.
+    $fs = $null
+    for ($try = 0; $try -lt 20; $try++) {
+        try { $fs = [System.IO.File]::Open($path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite); break }
+        catch [System.IO.IOException] { Start-Sleep -Milliseconds 100 }
+    }
+    if ($null -eq $fs) { $fs = [System.IO.File]::OpenRead($path) }
     try {
         [void]$fs.Seek($offset, [System.IO.SeekOrigin]::Begin)
         $buf = New-Object byte[] $len
