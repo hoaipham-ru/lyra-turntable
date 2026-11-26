@@ -89,3 +89,10 @@ untrusted input, no licence problem. These nits were parked:
 | P6-N3 | `crates/lyra-library/src/playlists.rs:571` — `dir.join(format!("playlist-{guid}.fplite"))` does not validate `guid` from `index.txt`; a crafted guid containing `..\` could read an arbitrary `.fplite`-suffixed file. Read-only, user-owned, opt-in migration (low severity). Reject guids containing path separators. | lyra-library |
 | P6-N4 | `tools/lyra-probe/src/meta.rs:234` — DSD `length_samples` is the exact 1-bit DSD frame count, while foobar2000's SACD input reports the PCM-converted length. `p6.ps1` records this as a note and marks the fb2k diff pending-human, so it does not break P6. Define the DSD length comparison on a common unit before claiming length parity at P8 (DoD §6). | lyra-qa |
 | P6-N5 | `crates/lyra-library/src/playlists.rs:687` — `location_to_path` does no percent-decoding of `file://` locations, relying on the empirical finding that fb2k v2 writes raw Windows paths. Fine today; revisit if a percent-encoded location ever appears. | lyra-library |
+
+## Deferred test: P8.2 loopback A/B vs foobar2000 (noted 2026-11-26)
+
+- [ ] **P8.2 loopback A/B** - Hoai has the hardware at home; run after returning. Render one file per
+  rate/format (16/44.1, 24/96, 24/192 FLAC, DSD64 via DoP and DSD->PCM) through both Lyra and foobar2000
+  into the same capture path and confirm bit-identical output. Procedure: lyra-engine HUMAN-CHECKS H2.1 / H8.2.
+  Also do the CPU <= foobar2000 x 1.2 comparison from P8.3 then (needs foobar2000 running in WASAPI exclusive).
