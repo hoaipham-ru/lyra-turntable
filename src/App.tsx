@@ -5,6 +5,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open as pick } from "@tauri-apps/plugin-dialog";
 import { Turntable } from "./Turntable";
+import { Settings } from "./Settings";
+import { S } from "./strings";
 import { isDefault } from "./backend/PlayerBackend";
 import { useFoobar } from "./backend/FoobarBackend";
 
@@ -38,6 +40,7 @@ export default function App() {
   const [dropping, setDropping] = useState(false);
   const [toast, setToast] = useState("");
   const [confirmClear, setConfirmClear] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const listRef = useRef<HTMLOListElement>(null);
   const pRef = useRef(p);
   pRef.current = p;
@@ -238,7 +241,7 @@ export default function App() {
 
   useEffect(() => {
     const k = (e: KeyboardEvent) => {
-      if (ask) return;
+      if (ask || settingsOpen) return;
       if (e.ctrlKey && !e.shiftKey && !e.altKey) {
         const map: Record<string, () => unknown> = { o: actRef.current.open, u: actRef.current.addLocation, n: actRef.current.newPlaylist, s: actRef.current.savePlaylist, p: actRef.current.preferences };
         const f = map[e.key.toLowerCase()];
@@ -253,7 +256,7 @@ export default function App() {
     };
     addEventListener("keydown", k);
     return () => removeEventListener("keydown", k);
-  }, [p, ask]);
+  }, [p, ask, settingsOpen]);
   useEffect(() => {
     listRef.current?.querySelector<HTMLElement>("[data-current=true]")?.scrollIntoView({ block: "nearest" });
   }, [p.current]);
@@ -294,6 +297,7 @@ export default function App() {
           </div>
           <span className={"status " + (p.connected ? "ok" : "")} data-tauri-drag-region title={p.status}>{p.connected ? "foobar2000" : "đang chờ…"}</span>
           <div className="winbtns">
+            <button className="wb" title={S.settingsBtn} aria-label={S.settingsBtn} onClick={() => setSettingsOpen(true)}>⚙</button>
             <button className={"wb " + (pinned ? "on" : "")} title={pinned ? "Bỏ ghim" : "Luôn nổi trên cùng"} aria-pressed={pinned}
               onClick={async () => { await win?.setAlwaysOnTop(!pinned); setPinned(!pinned); }}>⊤</button>
             <button className="wb" title="Thu nhỏ" onClick={() => win?.minimize()}>–</button>
@@ -350,6 +354,8 @@ export default function App() {
       </aside>
 
       {dropping && <div className="dropzone">Thả vào để thêm vào playlist</div>}
+
+      {settingsOpen && <Settings onClose={() => setSettingsOpen(false)} />}
 
       {ask && (
         <div className="modal" onClick={() => setAsk(null)}>

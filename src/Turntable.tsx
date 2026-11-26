@@ -1,5 +1,7 @@
 import { useRef } from "react";
 import type { PlayerView } from "./backend/PlayerBackend";
+import { Badge } from "./Badge";
+import { S } from "./strings";
 
 // Geometry (SVG units). Original design: cream aluminium plinth, smoked lid hinges, straight arm.
 const W = 640, H = 500;
@@ -23,7 +25,10 @@ function armAngle(r: number) {
 }
 const A_START = armAngle(R_START), A_END = armAngle(R_END);
 
-export function Turntable({ p }: { p: PlayerView }) {
+// `volumeLocked` lets the parent force the bit-perfect lock (P4.5 may pass it
+// explicitly); when omitted we derive it from the backend's `bitPerfect` flag.
+// The foobar backend leaves `bitPerfect` unset, so its volume stays fully live.
+export function Turntable({ p, volumeLocked }: { p: PlayerView; volumeLocked?: boolean }) {
   const svg = useRef<SVGSVGElement>(null);
   const knob = useRef<{ y: number; v: number } | null>(null);
   const playing = p.state === "playing";
@@ -60,7 +65,14 @@ export function Turntable({ p }: { p: PlayerView }) {
     style: { cursor: "pointer" },
   });
 
-  const vAng = -135 + p.volume * 270;
+  // Bit-perfect lock: the knob sits at 0 dB (= max, 1.0) and setVolume is never
+  // called, because gain must be unity to stay bit-perfect (adjust on the DAC/amp).
+  const locked = volumeLocked ?? p.bitPerfect === true;
+  const vol = locked ? 1 : p.volume;
+  const setVol = (v: number) => {
+    if (!locked) p.setVolume(v);
+  };
+  const vAng = -135 + vol * 270;
   const labelText = (p.track?.title || "—").slice(0, 22);
 
   return (
@@ -188,6 +200,9 @@ export function Turntable({ p }: { p: PlayerView }) {
         <text x="421" y="449">POWER</text>
       </g>
 
+      {/* bit-perfect badge, near the POWER lamp (hidden for the foobar backend) */}
+      <Badge p={p} x={455} y={408} />
+
       {/* piano keys */}
       <rect x="56" y="420" width="188" height="52" rx="8" fill="#2c2926" />
       {[
@@ -204,27 +219,30 @@ export function Turntable({ p }: { p: PlayerView }) {
         </g>
       ))}
 
-      {/* volume knob: drag up/down, wheel, or arrow keys */}
+      {/* volume knob: drag up/down, wheel, or arrow keys. Locked at 0 dB in bit-perfect mode. */}
       <g
         role="slider"
         tabIndex={0}
         aria-label="Âm lượng"
         aria-valuemin={0}
         aria-valuemax={100}
-        aria-valuenow={Math.round(p.volume * 100)}
-        style={{ cursor: "ns-resize" }}
+        aria-valuenow={Math.round(vol * 100)}
+        aria-disabled={locked}
+        style={{ cursor: locked ? "not-allowed" : "ns-resize" }}
         onPointerDown={(e) => {
+          if (locked) return;
           (e.target as Element).setPointerCapture(e.pointerId);
           knob.current = { y: e.clientY, v: p.volume };
         }}
-        onPointerMove={(e) => knob.current && p.setVolume(Math.max(0, Math.min(1, knob.current.v + (knob.current.y - e.clientY) / 160)))}
+        onPointerMove={(e) => knob.current && setVol(Math.max(0, Math.min(1, knob.current.v + (knob.current.y - e.clientY) / 160)))}
         onPointerUp={() => (knob.current = null)}
-        onWheel={(e) => p.setVolume(Math.max(0, Math.min(1, p.volume - Math.sign(e.deltaY) * 0.04)))}
+        onWheel={(e) => setVol(Math.max(0, Math.min(1, p.volume - Math.sign(e.deltaY) * 0.04)))}
         onKeyDown={(e) => {
-          if (e.key === "ArrowUp" || e.key === "ArrowRight") p.setVolume(Math.min(1, p.volume + 0.05));
-          if (e.key === "ArrowDown" || e.key === "ArrowLeft") p.setVolume(Math.max(0, p.volume - 0.05));
+          if (e.key === "ArrowUp" || e.key === "ArrowRight") setVol(Math.min(1, p.volume + 0.05));
+          if (e.key === "ArrowDown" || e.key === "ArrowLeft") setVol(Math.max(0, p.volume - 0.05));
         }}
       >
+        {locked && <title>{S.volumeLockedTip}</title>}
         {Array.from({ length: 11 }, (_, i) => {
           const a = ((-135 + i * 27 - 90) * Math.PI) / 180;
           return <line key={i} x1={560 + Math.cos(a) * 34} y1={430 + Math.sin(a) * 34} x2={560 + Math.cos(a) * 39} y2={430 + Math.sin(a) * 39} stroke="#6b655b" strokeWidth={i % 5 === 0 ? 1.6 : 0.9} />;
