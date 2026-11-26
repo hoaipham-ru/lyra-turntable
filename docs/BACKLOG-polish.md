@@ -102,3 +102,31 @@ untrusted input, no licence problem. These nits were parked:
   ASIO output for FLAC 16/44.1, 24/96, 24/192 and DSD64. Check bit-perfect, underruns, and which DSD path is chosen.
   Also try DoP if a forced-DoP option exists (earphones off). Procedure: lyra-engine HUMAN-CHECKS H8.3.
   Already passed on the Walkman via WASAPI exclusive: PCM 44.1/96/192 bit-perfect, 0 underruns.
+## Known weaknesses as of 0.4.1 (2026-11-26)
+
+Honest list of what is still weak or unverified. Owners in brackets.
+
+### Audio engine
+- [ ] **DSD->PCM underruns**: 3 per 60 s on the onboard codec, 1 per 20 s on the Sony NW-A55 -> audible ticks. Cause is in Lyra's DSD->PCM path (per-period converter cost spikes and/or a thin buffer), not the device. Average CPU is only 1.4 %, so suspect spikes, not total cost. Must be 0 before 1.0 / the soak. [lyra-dsd, lyra-output]
+- [ ] **DSD track length shows 0:00**: total duration missing for DFF, so the seek bar and needle-drop are disabled for DSD. [lyra-dsd, lyra-engine]
+- [ ] **Truncated files end silently** with no error event. [lyra-decode, lyra-engine]
+- [ ] **DoP never chosen automatically**: Windows cannot detect DoP support, so Lyra only uses DoP when told; no forced-DoP option in lyra-play/Settings has been tested on hardware. [lyra-output, lyra-app]
+- [ ] **ASIO only tested against a mock driver**; real ASIO pending (Sony NW-A55 driver, H8.3). [lyra-output]
+- [ ] **No loopback A/B vs foobar2000 yet** (P8.2, hardware at home) and **no CPU comparison vs foobar2000** (P8.3 needs foobar running). [lyra-qa, human]
+- [ ] **30-min soak not run yet** (and the 8-h soak is on the long-test list). [lyra-qa]
+- [ ] **Hardware seek verification** and **device render taps in P8** still open (LOG follow-ups). [lyra-qa]
+
+### App / UI
+- [ ] **No automated UI tests at all until now** - 0.4.0 shipped 4 UI bugs (Vietnamese strings, dead dropdowns, no-op volume, no playlist select/reorder). New agent lyra-ui-qa (component + Playwright + real-window tauri-driver) must gate every UI change. [lyra-ui-qa]
+- [ ] **0.4.1 fixes not verified in the real window by an automated test** (English UI, app-drawn Dropdown, endpoint volume knob, select/double-click/Delete/drag-reorder). [lyra-ui-qa]
+- [ ] **Reordering the playlist that is playing** does not update the engine queue: next/prev may follow the old order until the track changes. [lyra-engine, lyra-app]
+- [ ] **Drag-to-reorder only on the Lyra backend**; foobar2000 backend has no moveItem. Click now selects and **double-click plays** (behaviour change from 0.4.0). [lyra-app]
+- [ ] **Volume knob = device (endpoint) volume**: keeps bit-perfect, but on a device without hardware volume in WASAPI exclusive it may do nothing; no UI hint for that case yet. Not tested on the NW-A55. [lyra-app, lyra-output]
+- [ ] **Settings device/mode/DSD changes apply only when the engine (re)starts**; no live re-open of the device. [lyra-app, lyra-engine]
+- [ ] **foobar2000 is still the default backend** until P8 (switch in Settings). [lyra-app]
+- [ ] **Language is a compile-time switch** (strings.ts lang), no in-app toggle. [lyra-app]
+- [ ] Hard-coded foobar2000 path, icon set, commit identity and other polish items above remain. [lyra-app]
+
+### Process
+- [ ] **Agent scripts can be wrong silently**: p8_perf.ps1 first crashed, then "measured" an idle process because PowerShell 5.1 split a path with spaces. QA scripts need a self-check (errors counter, non-zero frames) before numbers are trusted. [lyra-qa]
+- [ ] **Stopping a run mid-wave leaves orphans** (chain-*.sh bash processes survive taskkill /T; an orphan started the soak and left the headphones muted). Orchestrator should register background chains in STATUS so a stop can kill them. [orchestrator]

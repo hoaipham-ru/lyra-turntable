@@ -65,9 +65,10 @@ export function Turntable({ p, volumeLocked }: { p: PlayerView; volumeLocked?: b
     style: { cursor: "pointer" },
   });
 
-  // Bit-perfect lock: the knob sits at 0 dB (= max, 1.0) and setVolume is never
-  // called, because gain must be unity to stay bit-perfect (adjust on the DAC/amp).
-  const locked = volumeLocked ?? p.bitPerfect === true;
+  // The knob drives the device (endpoint) volume, which Windows applies after the
+  // render client: the stream stays bit-perfect, so the knob is live by default.
+  // A parent can still force a lock (volumeLocked) for a device without volume.
+  const locked = volumeLocked === true;
   const vol = locked ? 1 : p.volume;
   const setVol = (v: number) => {
     if (!locked) p.setVolume(v);
@@ -76,7 +77,7 @@ export function Turntable({ p, volumeLocked }: { p: PlayerView; volumeLocked?: b
   const labelText = (p.track?.title || "—").slice(0, 22);
 
   return (
-    <svg ref={svg} viewBox={`0 0 ${W} ${H}`} className="deck-svg" role="img" aria-label="Đầu đĩa than">
+    <svg ref={svg} viewBox={`0 0 ${W} ${H}`} className="deck-svg" role="img" aria-label="Turntable">
       <defs>
         <linearGradient id="alu" x1="0" y1="0" x2="1" y2="1">
           <stop offset="0" stopColor="#ece7dc" />
@@ -206,9 +207,9 @@ export function Turntable({ p, volumeLocked }: { p: PlayerView; volumeLocked?: b
       {/* piano keys */}
       <rect x="56" y="420" width="188" height="52" rx="8" fill="#2c2926" />
       {[
-        { x: 62, label: "PREV", icon: "M 14 0 L 4 7 L 14 14 Z M 2 0 L 2 14", fn: p.prev, aria: "Bài trước" },
-        { x: 122, label: playing ? "PAUSE" : "PLAY", icon: playing ? "M 3 0 L 3 14 M 11 0 L 11 14" : "M 3 0 L 14 7 L 3 14 Z", fn: p.playPause, aria: playing ? "Tạm dừng" : "Phát" },
-        { x: 182, label: "NEXT", icon: "M 2 0 L 12 7 L 2 14 Z M 14 0 L 14 14", fn: p.next, aria: "Bài tiếp" },
+        { x: 62, label: "PREV", icon: "M 14 0 L 4 7 L 14 14 Z M 2 0 L 2 14", fn: p.prev, aria: "Previous" },
+        { x: 122, label: playing ? "PAUSE" : "PLAY", icon: playing ? "M 3 0 L 3 14 M 11 0 L 11 14" : "M 3 0 L 14 7 L 3 14 Z", fn: p.playPause, aria: playing ? "Pause" : "Play" },
+        { x: 182, label: "NEXT", icon: "M 2 0 L 12 7 L 2 14 Z M 14 0 L 14 14", fn: p.next, aria: "Next" },
       ].map((k) => (
         <g key={k.x} {...key(k.fn)} aria-label={k.aria} className="pkey">
           <rect x={k.x} y="425" width="56" height="42" rx="5" fill="#efeae0" stroke="#b5ae9f" />
@@ -223,7 +224,7 @@ export function Turntable({ p, volumeLocked }: { p: PlayerView; volumeLocked?: b
       <g
         role="slider"
         tabIndex={0}
-        aria-label="Âm lượng"
+        aria-label="Volume"
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={Math.round(vol * 100)}

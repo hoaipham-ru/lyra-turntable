@@ -174,6 +174,13 @@ pub fn playlists_remove(app: AppHandle, state: State<'_, LibraryState>, id: Stri
     with_store(&app, &state, |store| store.remove_items(pid, &indices).map_err(|e| e.to_string()))
 }
 
+/// Move the item at `from` to index `to` (drag-to-reorder in the playlist card).
+#[tauri::command]
+pub fn playlists_reorder(app: AppHandle, state: State<'_, LibraryState>, id: String, from: usize, to: usize) -> Result<(), String> {
+    let pid = parse_id(&id)?;
+    with_store(&app, &state, |store| store.reorder(pid, from, to).map_err(|e| e.to_string()))
+}
+
 /// Clear all items from a playlist.
 #[tauri::command]
 pub fn playlists_clear(app: AppHandle, state: State<'_, LibraryState>, id: String) -> Result<(), String> {

@@ -10,7 +10,7 @@ const COLS = ["%artist%", "%title%", "%album%", "%length_seconds%", "%filename%"
 // Beefweb wants ONE comma-separated columns parameter
 const q = (cols: string[]) => "columns=" + cols.map(encodeURIComponent).join(",");
 const toTrack = (c: string[], key: string): Track => {
-  const title = c[1] || c[4] || "Không rõ tên";
+  const title = c[1] || c[4] || "Unknown title";
   const album = c[2] && c[2] !== "?" && c[2] !== title ? c[2] : "";
   return { artist: c[0] && c[0] !== "?" ? c[0] : "", title, album, length: +c[3] || 0, key };
 };
@@ -20,7 +20,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export function useFoobarBackend(base = BASE): PlayerBackend {
   const [connected, setConnected] = useState(false);
-  const [status, setStatus] = useState("Đang chờ foobar2000…");
+  const [status, setStatus] = useState("Waiting for foobar2000…");
   const [state, setState] = useState<PlayerBackend["state"]>("stopped");
   const [track, setTrack] = useState<Track | null>(null);
   const [pos, setPos] = useState(0);
@@ -120,7 +120,7 @@ export function useFoobarBackend(base = BASE): PlayerBackend {
       } catch {
         if (!alive) return;
         setConnected(false);
-        setStatus("Đang chờ foobar2000 + Beefweb ở " + base);
+        setStatus("Waiting for foobar2000 + Beefweb at " + base);
       }
     };
     tick();

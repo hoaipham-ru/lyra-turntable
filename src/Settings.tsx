@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { S } from "./strings";
+import { Dropdown } from "./Dropdown";
 
 // Settings panel (S08): backend, output device, output mode and DSD routing.
 // Persists via the P4.1 Tauri commands `settings_get` / `settings_set`; outside
@@ -138,43 +139,52 @@ export function Settings({ onClose, onBackendChange }: { onClose: () => void; on
         {/* Output device: system default + probed render endpoints. */}
         <fieldset className="sfield">
           <legend><label htmlFor="set-device">{S.deviceLabel}</label></legend>
-          <select id="set-device" value={s.deviceId} onChange={(e) => save({ deviceId: e.target.value })}>
-            <option value="">{S.deviceSystemDefault}</option>
-            {devices.map((d) => {
-              const khz = maxRateKHz(d);
-              const tag = d.isDefault ? ` ${S.deviceDefaultTag}` : "";
-              const rate = khz ? ` · ${S.maxRate} ${khz} kHz` : "";
-              return (
-                <option key={d.id} value={d.id}>
-                  {d.name}
-                  {tag}
-                  {rate}
-                </option>
-              );
-            })}
-          </select>
+          <Dropdown
+            id="set-device"
+            value={s.deviceId}
+            onChange={(v) => save({ deviceId: v })}
+            options={[
+              { value: "", label: S.deviceSystemDefault },
+              ...devices.map((d) => {
+                const khz = maxRateKHz(d);
+                const tag = d.isDefault ? ` ${S.deviceDefaultTag}` : "";
+                const rate = khz ? ` · ${S.maxRate} ${khz} kHz` : "";
+                return { value: d.id, label: d.name + tag + rate };
+              }),
+            ]}
+          />
         </fieldset>
 
         {/* Output mode: exclusive (bit-perfect) / shared / ASIO. */}
         <fieldset className="sfield">
           <legend><label htmlFor="set-mode">{S.modeLabel}</label></legend>
-          <select id="set-mode" value={s.mode} onChange={(e) => save({ mode: e.target.value as Mode })}>
-            <option value="exclusive">{S.modeExclusive}</option>
-            <option value="shared">{S.modeShared}</option>
-            <option value="asio">{S.modeAsio}</option>
-          </select>
+          <Dropdown<Mode>
+            id="set-mode"
+            value={s.mode}
+            onChange={(v) => save({ mode: v })}
+            options={[
+              { value: "exclusive", label: S.modeExclusive },
+              { value: "shared", label: S.modeShared },
+              { value: "asio", label: S.modeAsio },
+            ]}
+          />
           <p className="hint">{S.modeHint}</p>
         </fieldset>
 
         {/* DSD routing: auto / DoP / native (ASIO) / PCM. */}
         <fieldset className="sfield">
           <legend><label htmlFor="set-dsd">{S.dsdLabel}</label></legend>
-          <select id="set-dsd" value={s.dsdMode} onChange={(e) => save({ dsdMode: e.target.value as DsdMode })}>
-            <option value="auto">{S.dsdAuto}</option>
-            <option value="dop">{S.dsdDop}</option>
-            <option value="native">{S.dsdNative}</option>
-            <option value="pcm">{S.dsdPcm}</option>
-          </select>
+          <Dropdown<DsdMode>
+            id="set-dsd"
+            value={s.dsdMode}
+            onChange={(v) => save({ dsdMode: v })}
+            options={[
+              { value: "auto", label: S.dsdAuto },
+              { value: "dop", label: S.dsdDop },
+              { value: "native", label: S.dsdNative },
+              { value: "pcm", label: S.dsdPcm },
+            ]}
+          />
           <p className="hint">{S.dsdHint}</p>
         </fieldset>
 

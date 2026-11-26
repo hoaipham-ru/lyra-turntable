@@ -27,6 +27,8 @@ export type PlayerBackend = {
   selectPlaylist: (id: string) => Promise<void>;
   newPlaylist: (title: string) => Promise<string | null>;
   removeItems: (idx: number[]) => Promise<void>;
+  // Move one item (drag-to-reorder). Optional: backends without it disable dragging.
+  moveItem?: (from: number, to: number) => Promise<void>;
   clearPlaylist: () => Promise<void>;
   refresh: () => Promise<void>;
   waitForItems: (atLeast: number, ms?: number) => Promise<boolean>;

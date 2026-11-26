@@ -6,6 +6,7 @@ import { listen } from "@tauri-apps/api/event";
 import { open as pick, save as pickSave } from "@tauri-apps/plugin-dialog";
 import { Turntable } from "./Turntable";
 import { Settings } from "./Settings";
+import { Dropdown } from "./Dropdown";
 import { S } from "./strings";
 import { isDefault } from "./backend/PlayerBackend";
 import { useFoobar } from "./backend/FoobarBackend";
@@ -82,6 +83,12 @@ export default function App() {
   const [confirmClear, setConfirmClear] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const listRef = useRef<HTMLOListElement>(null);
+  // Playlist card selection + drag-to-reorder (foobar2000-style: click selects, double-click plays).
+  const [sel, setSel] = useState<Set<number>>(new Set());
+  const anchor = useRef(-1);
+  const [drag, setDrag] = useState<{ from: number; over: number } | null>(null);
+  const press = useRef<{ i: number; y: number; id: number } | null>(null);
+  const justDragged = useRef(false);
   const pRef = useRef(p);
   pRef.current = p;
 
@@ -143,7 +150,7 @@ export default function App() {
   // A short press stays a normal click. Controls that drag on their own are left alone.
   useEffect(() => {
     if (!win) return;
-    const OWN_DRAG = "input,select,textarea,[role=slider],.menu,.dialog";
+    const OWN_DRAG = "input,select,textarea,[role=slider],.menu,.dialog,.dd,.list";
     let start: { x: number; y: number } | null = null;
     const down = (e: PointerEvent) => {
       if (e.button !== 0 || (e.target as Element).closest(OWN_DRAG)) return;
@@ -215,7 +222,7 @@ export default function App() {
     const before = (await pRef.current.ensureDefault())?.count ?? 0;
     await addToBackend(id, paths);
     if (await pRef.current.waitForItems(before + 1)) pRef.current.playIn(id, before);
-    say(`Đang phát trong Default Playlist`);
+    say(`Playing in Default Playlist`);
   }, [addToBackend]);
   // "Thêm": append to the playlist on screen; adding to Default by hand means "keep it next time"
   const addPaths = useCallback(async (paths: string[]) => {
@@ -226,7 +233,7 @@ export default function App() {
     const before = pl.list.length;
     await addToBackend(pl.selected ?? "", paths);
     await pRef.current.waitForItems(before + 1);
-    say(`Đã thêm ${paths.length} mục vào ${sel?.title ?? "playlist"}`);
+    say(`Added ${paths.length} item(s) to ${sel?.title ?? "playlist"}`);
   }, [addToBackend]);
   const clearShown = () => {
     const sel = p.playlists.find((x) => x.id === p.selected);
@@ -236,23 +243,23 @@ export default function App() {
 
   const actions = {
     open: async () => {
-      const r = await pick({ multiple: true, title: "Mở file nhạc", filters: [{ name: "Âm thanh", extensions: AUDIO }] });
+      const r = await pick({ multiple: true, title: "Open music files", filters: [{ name: "Audio", extensions: AUDIO }] });
       if (r) await openPaths(([] as string[]).concat(r));
     },
     addFiles: async () => {
-      const r = await pick({ multiple: true, title: "Thêm file vào playlist", filters: [{ name: "Âm thanh", extensions: AUDIO }] });
+      const r = await pick({ multiple: true, title: "Add files to playlist", filters: [{ name: "Audio", extensions: AUDIO }] });
       if (r) await addPaths(([] as string[]).concat(r));
     },
     addFolder: async () => {
-      const r = await pick({ directory: true, multiple: true, title: "Thêm thư mục vào playlist" });
+      const r = await pick({ directory: true, multiple: true, title: "Add folder to playlist" });
       if (r) await addPaths(([] as string[]).concat(r));
     },
     addLocation: () =>
-      setAsk({ title: "Thêm địa chỉ", label: "URL (radio, stream, file trên mạng)", value: "https://", ok: "Thêm", done: (v) => v.trim() && addPaths([v.trim()]) }),
+      setAsk({ title: "Add location", label: "URL (radio, stream, network file)", value: "https://", ok: "Add", done: (v) => v.trim() && addPaths([v.trim()]) }),
     newPlaylist: () =>
-      setAsk({ title: "Playlist mới", label: "Tên playlist", value: `Playlist ${p.playlists.length + 1}`, ok: "Tạo", done: (v) => p.newPlaylist(v.trim() || "Playlist mới") }),
+      setAsk({ title: "New playlist", label: "Playlist name", value: `Playlist ${p.playlists.length + 1}`, ok: "Create", done: (v) => p.newPlaylist(v.trim() || "New playlist") }),
     loadPlaylist: async () => {
-      const r = await pick({ multiple: false, title: "Mở playlist", filters: [{ name: "Playlist", extensions: PLAYLIST_EXT }] });
+      const r = await pick({ multiple: false, title: "Open playlist", filters: [{ name: "Playlist", extensions: PLAYLIST_EXT }] });
       if (typeof r === "string") {
         await p.newPlaylist(baseName(r));
         await addPaths([r]);
@@ -273,20 +280,20 @@ export default function App() {
     quit: () => invoke("quit_app"),
   };
   const items: ({ label: string; key?: string; run: () => unknown } | null)[] = [
-    { label: "Mở file…", key: "Ctrl+O", run: actions.open },
-    { label: "Thêm file…", run: actions.addFiles },
-    { label: "Thêm thư mục…", run: actions.addFolder },
-    { label: "Thêm địa chỉ…", key: "Ctrl+U", run: actions.addLocation },
+    { label: "Open file…", key: "Ctrl+O", run: actions.open },
+    { label: "Add files…", run: actions.addFiles },
+    { label: "Add folder…", run: actions.addFolder },
+    { label: "Add location…", key: "Ctrl+U", run: actions.addLocation },
     null,
-    { label: "Playlist mới", key: "Ctrl+N", run: actions.newPlaylist },
-    { label: "Mở playlist…", run: actions.loadPlaylist },
-    { label: "Lưu playlist…", key: "Ctrl+S", run: actions.savePlaylist },
+    { label: "New playlist", key: "Ctrl+N", run: actions.newPlaylist },
+    { label: "Open playlist…", run: actions.loadPlaylist },
+    { label: "Save playlist…", key: "Ctrl+S", run: actions.savePlaylist },
     // "Cài đặt foobar2000" (foobar2000 Preferences) only applies to the foobar backend.
     ...(backend === "foobar"
-      ? ([null, { label: "Cài đặt foobar2000", key: "Ctrl+P", run: actions.preferences }] as const)
+      ? ([null, { label: "foobar2000 preferences", key: "Ctrl+P", run: actions.preferences }] as const)
       : []),
     null,
-    { label: "Thoát", run: actions.quit },
+    { label: "Exit", run: actions.quit },
   ];
   const actRef = useRef(actions);
   actRef.current = actions;
@@ -351,24 +358,26 @@ export default function App() {
   useEffect(() => {
     listRef.current?.querySelector<HTMLElement>("[data-current=true]")?.scrollIntoView({ block: "nearest" });
   }, [p.current]);
+  // A different playlist or a changed list invalidates the selection.
+  useEffect(() => { setSel(new Set()); anchor.current = -1; }, [p.selected, p.list.length]);
 
   const frac = p.duration ? p.position / p.duration : 0;
 
   return (
     <div className={"shell " + (showList ? "open" : "closed")} onClick={() => setMenu(false)}>
-      <section className="deck" aria-label="Đầu đĩa">
+      <section className="deck" aria-label="Turntable">
         <Turntable p={p} />
       </section>
 
       <button className="drawer" onClick={toggleSidebar} aria-expanded={showList} aria-controls="sidebar"
-        title={showList ? "Thu thẻ bài hát vào" : "Mở thẻ bài hát"}>
+        title={showList ? "Hide playlist" : "Show playlist"}>
         <span aria-hidden>{showList ? "‹" : "›"}</span>
       </button>
 
-      <aside id="sidebar" className="card" aria-label="Thẻ bài hát">
+      <aside id="sidebar" className="card" aria-label="Playlist">
         <div className="bar" data-tauri-drag-region>
           <div className="menuwrap" onClick={(e) => e.stopPropagation()}>
-            <button className={"filebtn " + (menu ? "on" : "")} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(!menu)}>Tệp ▾</button>
+            <button className={"filebtn " + (menu ? "on" : "")} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(!menu)}>File ▾</button>
             {menu && (
               <ul className="menu" role="menu">
                 {items.map((it, i) =>
@@ -386,65 +395,108 @@ export default function App() {
               </ul>
             )}
           </div>
-          <span className={"status " + (p.connected ? "ok" : "")} data-tauri-drag-region title={p.status}>{p.connected ? (backend === "native" ? "Lyra" : "foobar2000") : "đang chờ…"}</span>
+          <span className={"status " + (p.connected ? "ok" : "")} data-tauri-drag-region title={p.status}>{p.connected ? (backend === "native" ? "Lyra" : "foobar2000") : "waiting…"}</span>
           <div className="winbtns">
             <button className="wb" title={S.settingsBtn} aria-label={S.settingsBtn} onClick={() => setSettingsOpen(true)}>⚙</button>
-            <button className={"wb " + (pinned ? "on" : "")} title={pinned ? "Bỏ ghim" : "Luôn nổi trên cùng"} aria-pressed={pinned}
+            <button className={"wb " + (pinned ? "on" : "")} title={pinned ? "Unpin" : "Always on top"} aria-pressed={pinned}
               onClick={async () => { await win?.setAlwaysOnTop(!pinned); setPinned(!pinned); }}>⊤</button>
-            <button className="wb" title="Thu nhỏ" onClick={() => win?.minimize()}>–</button>
-            <button className="wb close" title="Đóng (tắt luôn foobar2000 nếu app đã bật nó)" onClick={() => win?.close()}>×</button>
+            <button className="wb" title="Minimize" onClick={() => win?.minimize()}>–</button>
+            <button className="wb close" title="Close (also closes foobar2000 if the app started it)" onClick={() => win?.close()}>×</button>
           </div>
         </div>
 
-        <p className="kicker">{p.state === "playing" ? "Đang quay" : p.state === "paused" ? "Tạm dừng" : "Đứng yên"}</p>
-        <h1 className="title">{p.track?.title || (p.connected ? "Chưa phát bài nào" : backend === "native" ? S.engineStarting : "Đang bật foobar2000…")}</h1>
+        <p className="kicker">{p.state === "playing" ? "Now playing" : p.state === "paused" ? "Paused" : "Stopped"}</p>
+        <h1 className="title">{p.track?.title || (p.connected ? "Nothing playing" : backend === "native" ? S.engineStarting : "Starting foobar2000…")}</h1>
         {p.track && (p.track.artist || p.track.album) && <p className="artist">{[p.track.artist, p.track.album].filter(Boolean).join(" — ")}</p>}
 
         <div className="seekrow">
           <span>{fmt(p.position)}</span>
           <input type="range" min={0} max={1000} value={Math.round(frac * 1000)}
-            onChange={(e) => p.duration && p.seek((+e.target.value / 1000) * p.duration)} aria-label="Vị trí trong bài" disabled={!p.duration} />
+            onChange={(e) => p.duration && p.seek((+e.target.value / 1000) * p.duration)} aria-label="Position in track" disabled={!p.duration} />
           <span>{fmt(p.duration)}</span>
         </div>
 
         {(<>
         <div className="plhead">
           <label className="sr" htmlFor="pl">Playlist</label>
-          <select id="pl" value={p.selected ?? ""} onChange={(e) => { setConfirmClear(false); void p.selectPlaylist(e.target.value); }}>
-            {p.playlists.map((pl) => (
-              <option key={pl.id} value={pl.id}>{pl.title} · {pl.itemCount}</option>
-            ))}
-          </select>
-          <button className="mini" title="Playlist mới (Ctrl+N)" onClick={actions.newPlaylist}>＋</button>
-          <button className={"mini " + (confirmClear ? "danger" : "")} title="Xóa hết bài trong playlist này" disabled={!p.list.length}
+          <Dropdown
+            id="pl"
+            className="pl"
+            value={p.selected ?? ""}
+            onChange={(v) => { setConfirmClear(false); void p.selectPlaylist(v); }}
+            options={p.playlists.map((pl) => ({ value: pl.id, label: `${pl.title} · ${pl.itemCount}` }))}
+          />
+          <button className="mini" title="New playlist (Ctrl+N)" onClick={actions.newPlaylist}>＋</button>
+          <button className={"mini " + (confirmClear ? "danger" : "")} title="Remove all tracks from this playlist" disabled={!p.list.length}
             onClick={() => { if (confirmClear) { setConfirmClear(false); clearShown(); } else { setConfirmClear(true); setTimeout(() => setConfirmClear(false), 3000); } }}>
-            {confirmClear ? "Chắc chưa?" : "Xóa hết"}
+            {confirmClear ? "Sure?" : "Clear"}
           </button>
         </div>
         {p.list.length ? (
-          <ol ref={listRef} className="list">
+          <ol ref={listRef} className={"list" + (drag ? " dragging" : "")}
+            onKeyDown={(e) => {
+              if (e.key === "Delete" && sel.size) { e.preventDefault(); const idx = [...sel].sort((a, b) => a - b); setSel(new Set()); void p.removeItems(idx); }
+              if ((e.key === "a" || e.key === "A") && e.ctrlKey) { e.preventDefault(); setSel(new Set(p.list.map((_, i) => i))); }
+            }}
+            onPointerMove={(e) => {
+              const pr = press.current;
+              if (!pr || !p.moveItem) return;
+              if (!drag && Math.abs(e.clientY - pr.y) < 6) return;
+              const lis = [...(listRef.current?.children ?? [])] as HTMLElement[];
+              let over = lis.length - 1;
+              for (let k = 0; k < lis.length; k++) { const r = lis[k].getBoundingClientRect(); if (e.clientY < r.top + r.height / 2) { over = k; break; } }
+              if (over > pr.i) over = Math.max(pr.i, over - 1); // index the item will have after the move
+              if (!drag) { listRef.current?.setPointerCapture(pr.id); }
+              setDrag({ from: pr.i, over });
+            }}
+            onPointerUp={() => {
+              const d = drag;
+              press.current = null;
+              setDrag(null);
+              if (d && p.moveItem) {
+                justDragged.current = true;
+                setTimeout(() => (justDragged.current = false), 0);
+                if (d.from !== d.over) { setSel(new Set([d.over])); anchor.current = d.over; void p.moveItem(d.from, d.over); }
+              }
+            }}
+            onPointerCancel={() => { press.current = null; setDrag(null); }}>
             {p.list.map((t, i) => (
-              <li key={t.key} data-current={i === p.current}>
-                <button className="row" onClick={() => p.playAt(i)}>
+              <li key={t.key} data-current={i === p.current} data-sel={sel.has(i)}
+                data-drag={drag?.from === i} data-over={drag && drag.over === i && drag.from !== i ? (drag.over > drag.from ? "below" : "above") : undefined}
+                onPointerDown={(e) => { if (e.button === 0 && !(e.target as Element).closest(".rm")) press.current = { i, y: e.clientY, id: e.pointerId }; }}>
+                <button className="row"
+                  onClick={(e) => {
+                    if (justDragged.current) return;
+                    const next = new Set(e.ctrlKey ? sel : []);
+                    if (e.shiftKey && anchor.current >= 0) {
+                      const [a, b] = [Math.min(anchor.current, i), Math.max(anchor.current, i)];
+                      for (let k = a; k <= b; k++) next.add(k);
+                    } else if (e.ctrlKey && sel.has(i)) next.delete(i);
+                    else { next.add(i); anchor.current = i; }
+                    setSel(next);
+                  }}
+                  onDoubleClick={() => p.playAt(i)}
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); p.playAt(i); } }}
+                  title="Double-click to play · drag to reorder">
                   <span className="n">{String(i + 1).padStart(2, "0")}</span>
                   <span className="t">{t.title}{(t.artist || t.album) && <em>{[t.artist, t.album].filter(Boolean).join(" — ")}</em>}</span>
                   <span className="d">{t.length ? fmt(t.length) : ""}</span>
                 </button>
-                <button className="rm" title="Bỏ khỏi playlist" aria-label={`Bỏ ${t.title} khỏi playlist`} onClick={() => void p.removeItems([i])}>×</button>
+                <button className="rm" title="Remove from playlist" aria-label={`Remove ${t.title} from playlist`} onClick={() => void p.removeItems([i])}>×</button>
               </li>
             ))}
           </ol>
         ) : (
           <div className="empty">
-            <p>Playlist trống.</p>
-            <p>Kéo file hoặc thư mục nhạc vào cửa sổ, hoặc dùng <b>Tệp → Thêm file…</b></p>
+            <p>Playlist is empty.</p>
+            <p>Drop music files or folders onto the window, or use <b>File → Add files…</b></p>
           </div>
         )}
         </>)}
         {toast && <div className="toast" role="status">{toast}</div>}
       </aside>
 
-      {dropping && <div className="dropzone">Thả vào để thêm vào playlist</div>}
+      {dropping && <div className="dropzone">Drop to add to playlist</div>}
 
       {settingsOpen && <Settings onClose={() => setSettingsOpen(false)} onBackendChange={setBackend} />}
 
@@ -455,7 +507,7 @@ export default function App() {
             <label htmlFor="askv">{ask.label}</label>
             <input id="askv" autoFocus value={ask.value} onChange={(e) => setAsk({ ...ask, value: e.target.value })} onFocus={(e) => e.target.select()} />
             <div className="dlgbtns">
-              <button type="button" className="ghost" onClick={() => setAsk(null)}>Hủy</button>
+              <button type="button" className="ghost" onClick={() => setAsk(null)}>Cancel</button>
               <button type="submit" className="primary">{ask.ok}</button>
             </div>
           </form>

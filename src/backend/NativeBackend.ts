@@ -14,9 +14,9 @@ const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window
 // Vietnamese UI strings. Kept inline to match FoobarBackend's current style; a
 // shared string table for the English/Vietnamese toggle is a polish-backlog item.
 const STR = {
-  waiting: "Đang khởi động Lyra Engine…",
+  waiting: "Starting Lyra Engine…",
   ready: "Lyra Engine · bit-perfect",
-  unknownTitle: "Không rõ tên",
+  unknownTitle: "Unknown title",
 } as const;
 
 // --- Engine event payloads (mirror EnginePayload in src-tauri/src/engine.rs) ---
@@ -89,6 +89,14 @@ export function useNativeBackend(): PlayerBackend {
   const [format, setFormat] = useState<string | null>(null);
   const [bitPerfect, setBitPerfect] = useState<boolean>(true);
   const [underruns, setUnderruns] = useState(0);
+  // Device (endpoint) volume: applied by Windows after the render client, so the
+  // stream itself stays bit-perfect. Device = the one chosen in Settings.
+  const [volume, setVolumeState] = useState(1);
+  const volDevice = () => { try { return (JSON.parse(localStorage.getItem("tt.settings") || "{}").deviceId as string) || null; } catch { return null; } };
+  useEffect(() => {
+    if (!inTauri) return;
+    void invoke<number>("endpoint_volume_get", { deviceId: volDevice() }).then(setVolumeState).catch(() => {});
+  }, [connected]);
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [list, setList] = useState<Track[]>([]);
@@ -257,10 +265,8 @@ export function useNativeBackend(): PlayerBackend {
     track,
     position: pos,
     duration: dur,
-    // The native engine is bit-perfect and volume-locked at 0 dB: there is no
-    // engine volume command (confirmed by P4.1). `volume` stays at 1.0 and
-    // `setVolume` is a no-op; P4.4 builds the locked-knob tooltip UX.
-    volume: 1.0,
+    // Endpoint (device) volume - see `endpoint_volume_*`; never touches the samples.
+    volume,
     art: connected && track ? art : null,
     playlists,
     selected,
@@ -273,8 +279,9 @@ export function useNativeBackend(): PlayerBackend {
       setPos(s); // optimistic; the next position event confirms it
       send({ type: "seek", seconds: s });
     },
-    setVolume: () => {
-      /* no-op: bit-perfect, locked at 0 dB (see `volume` above) */
+    setVolume: (v) => {
+      setVolumeState(v);
+      if (inTauri) void invoke("endpoint_volume_set", { deviceId: volDevice(), level: v }).catch(() => {});
     },
     playAt: (i) => {
       if (selected) void play(selected, i);
@@ -302,6 +309,12 @@ export function useNativeBackend(): PlayerBackend {
       const id = selRef.current;
       if (!id) return;
       await invoke("playlists_remove", { id, indices: idx }).catch(() => {});
+      await loadList(id);
+    },
+    moveItem: async (from, to) => {
+      const id = selRef.current;
+      if (!id || from === to) return;
+      await invoke("playlists_reorder", { id, from, to }).catch(() => {});
       await loadList(id);
     },
     clearPlaylist: async () => {

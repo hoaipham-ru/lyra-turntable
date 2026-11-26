@@ -106,5 +106,5 @@ const en: typeof vi = {
 const tables = { vi, en };
 
 // Active language. Vietnamese today; flip this (and re-import `S`) for English.
-export const lang: Lang = "vi";
+export const lang: Lang = "en";
 export const S = tables[lang];

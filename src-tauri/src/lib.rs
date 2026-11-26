@@ -25,6 +25,7 @@ use tauri::{AppHandle, Emitter, Manager, RunEvent};
 mod engine;
 mod library;
 mod settings;
+mod volume;
 use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetWindowTextLengthW, GetWindowThreadProcessId, IsWindowVisible, SetForegroundWindow, ShowWindow,
@@ -169,7 +170,7 @@ fn register_open_with() {
     let cmd = format!("\"{exe}\" \"%1\"");
     let icon = format!("\"{exe}\",0");
     reg(&["add", key, "/ve", "/d", APP_NAME, "/f"]);
-    reg(&["add", key, "/v", "FriendlyTypeName", "/d", "Âm thanh", "/f"]);
+    reg(&["add", key, "/v", "FriendlyTypeName", "/d", "Audio", "/f"]);
     reg(&["add", &format!(r"{key}\DefaultIcon"), "/ve", "/d", &icon, "/f"]);
     reg(&["add", &cmd_key, "/ve", "/d", &cmd, "/f"]);
     let app_key = format!(r"HKCU\Software\Classes\Applications\{exe_file}");
@@ -232,6 +233,8 @@ pub fn run() {
             take_pending,
             quit_app,
             // native engine control + events
+            volume::endpoint_volume_get,
+            volume::endpoint_volume_set,
             engine::engine_start,
             engine::engine_send,
             engine::engine_shutdown,
@@ -246,6 +249,7 @@ pub fn run() {
             library::playlists_items,
             library::playlists_add,
             library::playlists_remove,
+            library::playlists_reorder,
             library::playlists_clear,
             library::playlists_import_m3u,
             library::playlists_export_m3u,
@@ -270,14 +274,14 @@ pub fn run() {
             // The tray transport items drive foobar2000 (and would start it on demand),
             // so disable them in native mode — the window's own transport controls the engine.
             let fb_transport = !native;
-            let play = MenuItem::with_id(app, "play", "Phát / Tạm dừng", fb_transport, None::<&str>)?;
-            let next = MenuItem::with_id(app, "next", "Bài tiếp", fb_transport, None::<&str>)?;
-            let prev = MenuItem::with_id(app, "prev", "Bài trước", fb_transport, None::<&str>)?;
+            let play = MenuItem::with_id(app, "play", "Play / Pause", fb_transport, None::<&str>)?;
+            let next = MenuItem::with_id(app, "next", "Next", fb_transport, None::<&str>)?;
+            let prev = MenuItem::with_id(app, "prev", "Previous", fb_transport, None::<&str>)?;
             let sep1 = PredefinedMenuItem::separator(app)?;
-            let show = MenuItem::with_id(app, "show", "Hiện Lyra", true, None::<&str>)?;
-            let fb = MenuItem::with_id(app, "foobar", "Hiện / ẩn cửa sổ foobar2000", started, None::<&str>)?;
+            let show = MenuItem::with_id(app, "show", "Show Lyra", true, None::<&str>)?;
+            let fb = MenuItem::with_id(app, "foobar", "Show / hide foobar2000 window", started, None::<&str>)?;
             let sep2 = PredefinedMenuItem::separator(app)?;
-            let quit_label = if started { "Thoát (tắt cả foobar2000)" } else { "Thoát" };
+            let quit_label = if started { "Exit (also closes foobar2000)" } else { "Exit" };
             let quit = MenuItem::with_id(app, "quit", quit_label, true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&play, &next, &prev, &sep1, &show, &fb, &sep2, &quit])?;
 
