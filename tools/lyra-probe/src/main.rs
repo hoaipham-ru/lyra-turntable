@@ -2,10 +2,14 @@
 //!
 //! Subcommands:
 //! - `decode`  — decode an audio file to raw/WAV PCM and print a SHA-256 of the
-//!   raw payload (ffmpeg-backed reference decode for P0; ADR-007).
+//!   raw payload. Defaults to the merged `lyra-decode` engine (P1.5); `--engine
+//!   ffmpeg` selects the P0 reference path (ADR-007).
 //! - `compare` — the core QA primitive: bit-exact / tolerance comparison of two
 //!   PCM streams, with first differing frame, max abs diff and null depth (dB).
-//! - `align`, `capture`, `meta`, `mute` — stubs; implemented in later phases.
+//!   Audio files on either side are decoded with `--engine` (default `lyra`).
+//! - `mute`    — endpoint mute control (`on|off|report`) for the Sound rule; uses
+//!   the endpoint volume API and never touches the digital stream (P2).
+//! - `align`, `capture`, `meta` — stubs; implemented in later phases.
 //!
 //! # Exit-code contract
 //! Gating scripts and CI depend on these codes being distinct:
@@ -21,11 +25,14 @@
 //! See `testing/TEST-STRATEGY.md` §4 (parity criteria) and §9 (report format).
 
 mod compare;
+mod engine;
 mod ffmpeg;
+mod mute;
 mod pcm;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
+use mute::MuteAction;
 use lyra_core::{PcmSpec, SampleFormat};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -51,8 +58,48 @@ enum Commands {
     Capture,
     /// [P0.6] Dump a file's TrackMeta as JSON.
     Meta,
-    /// [P2] Mute/silence verification.
-    Mute,
+    /// Control the endpoint mute flag for the Sound rule (does not touch samples).
+    Mute(MuteArgs),
+}
+
+/// Decoder backend for audio inputs.
+#[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
+enum Engine {
+    /// The merged `lyra-decode` crate — the decoder under test (P1.5, default).
+    Lyra,
+    /// The ffmpeg reference path (P0 / ADR-007 third opinion).
+    Ffmpeg,
+}
+
+#[derive(Parser)]
+struct MuteArgs {
+    /// What to do with the endpoint mute flag.
+    #[arg(value_enum)]
+    action: MuteActionArg,
+    /// Target render endpoint id. Omit for the default-console endpoint.
+    #[arg(long)]
+    device: Option<String>,
+}
+
+/// CLI spelling of [`MuteAction`].
+#[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
+enum MuteActionArg {
+    /// Mute the endpoint.
+    On,
+    /// Unmute the endpoint.
+    Off,
+    /// Report the current mute state without changing it.
+    Report,
+}
+
+impl From<MuteActionArg> for MuteAction {
+    fn from(a: MuteActionArg) -> Self {
+        match a {
+            MuteActionArg::On => MuteAction::On,
+            MuteActionArg::Off => MuteAction::Off,
+            MuteActionArg::Report => MuteAction::Report,
+        }
+    }
 }
 
 /// Output container for `decode`.
@@ -77,6 +124,17 @@ struct DecodeArgs {
     /// Print the SHA-256 of the raw PCM payload (always printed in JSON too).
     #[arg(long)]
     hash: bool,
+    /// Decoder backend: `lyra` (the engine under test, default) or `ffmpeg`.
+    #[arg(long, value_enum, default_value_t = Engine::Lyra)]
+    engine: Engine,
+    /// Seek to this source frame before decoding (lyra engine only). The hash and
+    /// `--out` then cover the post-seek output, for seek-parity against a golden
+    /// slice (TEST-STRATEGY §4).
+    #[arg(long)]
+    seek: Option<u64>,
+    /// Stop after this many frames (useful with `--seek` to grab a fixed slice).
+    #[arg(long)]
+    frames: Option<u64>,
 }
 
 #[derive(Parser)]
@@ -98,6 +156,21 @@ struct CompareArgs {
     /// Channel count for raw inputs.
     #[arg(long)]
     channels: Option<u16>,
+    /// Per-side overrides for the B stream, so a device tap in one container (e.g.
+    /// 24-in-32) can be compared against a packed-24 golden. Each defaults to the
+    /// A value. The ADR-004 shift then makes the two compare directly.
+    #[arg(long)]
+    bits_b: Option<u32>,
+    /// Container format override for a raw B input (defaults to `--raw-format`).
+    #[arg(long, value_enum)]
+    raw_format_b: Option<RawFormat>,
+    /// Channel count override for a raw B input (defaults to `--channels`).
+    #[arg(long)]
+    channels_b: Option<u16>,
+    /// Decoder backend for audio-file inputs: `lyra` (default) or `ffmpeg`. Raw
+    /// inputs are read directly and ignore this.
+    #[arg(long, value_enum, default_value_t = Engine::Lyra)]
+    engine: Engine,
 }
 
 /// Container format selector for raw PCM inputs.
@@ -129,7 +202,7 @@ fn main() -> ExitCode {
         Commands::Align => stub("align", "P2"),
         Commands::Capture => stub("capture", "P2"),
         Commands::Meta => stub("meta", "P0.6"),
-        Commands::Mute => stub("mute", "P2"),
+        Commands::Mute(a) => mute::run(a.action.into(), a.device.as_deref()),
     };
     match r {
         Ok(code) => code,
@@ -163,10 +236,35 @@ fn format_name(f: SampleFormat) -> &'static str {
     }
 }
 
+/// Decode an audio file to raw interleaved PCM using the selected backend.
+fn decode_with(engine: Engine, path: &Path) -> Result<ffmpeg::Decoded> {
+    match engine {
+        Engine::Lyra => engine::decode_raw(path),
+        Engine::Ffmpeg => ffmpeg::decode_raw(path),
+    }
+}
+
 fn cmd_decode(args: &DecodeArgs) -> Result<ExitCode> {
-    let decoded = ffmpeg::decode_raw(&args.input)?;
+    let sliced = args.seek.is_some() || args.frames.is_some();
+    if sliced && args.engine != Engine::Lyra {
+        bail!("--seek/--frames are only supported with --engine lyra");
+    }
+    let decoded = if sliced {
+        engine::decode_slice(&args.input, args.seek, args.frames)?
+    } else {
+        decode_with(args.engine, &args.input)?
+    };
     let spec = decoded.spec;
     let hash = sha256_hex(&decoded.pcm);
+
+    // For the engine under test, also report the container-declared length so a
+    // harness can assert `total_frames == decoded frames` (sample-accurate length,
+    // == foobar2000 %length_samples% for the lossless corpus). ffmpeg has no such
+    // field here, so it is reported null.
+    let declared_frames: Option<u64> = match args.engine {
+        Engine::Lyra => lyra_decode::probe(&args.input).ok().and_then(|p| p.total_frames),
+        Engine::Ffmpeg => None,
+    };
 
     if let Some(out) = &args.out {
         let bytes = match args.format {
@@ -182,12 +280,15 @@ fn cmd_decode(args: &DecodeArgs) -> Result<ExitCode> {
 
     let report = serde_json::json!({
         "input": args.input.to_string_lossy(),
+        "engine": match args.engine { Engine::Lyra => "lyra", Engine::Ffmpeg => "ffmpeg" },
         "rate": spec.rate,
         "channels": spec.channels,
         "bits": spec.bits_valid,
         "format": format_name(spec.format),
         "pcmBytes": decoded.pcm.len(),
         "pcmFrames": decoded.pcm.len() / spec.bytes_per_frame(),
+        "declaredFrames": declared_frames,
+        "seek": args.seek,
         "sha256": hash,
         "out": args.out.as_ref().map(|p| p.to_string_lossy()),
         "outFormat": args.out.as_ref().map(|_| match args.format {
@@ -215,18 +316,25 @@ fn is_raw_ext(path: &Path) -> bool {
     )
 }
 
-fn load_stream(path: &Path, args: &CompareArgs) -> Result<Loaded> {
+/// Per-side raw-input parameters (an audio file ignores these and uses its spec).
+struct RawParams {
+    raw_format: Option<RawFormat>,
+    bits: Option<u32>,
+    channels: Option<u16>,
+}
+
+fn load_stream(path: &Path, p: &RawParams, engine: Engine) -> Result<Loaded> {
     if is_raw_ext(path) {
-        let fmt = args
+        let fmt = p
             .raw_format
             .map(RawFormat::to_sample_format)
             .context("raw input needs --raw-format (s16/s24/s32)")?;
-        let bits = args.bits.unwrap_or(match fmt {
+        let bits = p.bits.unwrap_or(match fmt {
             SampleFormat::S16 => 16,
             SampleFormat::S24 => 24,
             SampleFormat::S32 | SampleFormat::F32 => 32,
         });
-        let channels = args.channels.context("raw input needs --channels")?;
+        let channels = p.channels.context("raw input needs --channels")?;
         let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
         Ok(Loaded {
             samples: pcm::unpack(&bytes, fmt, bits)?,
@@ -235,9 +343,9 @@ fn load_stream(path: &Path, args: &CompareArgs) -> Result<Loaded> {
             source: format!("{} ({}, {}-bit, {}ch)", path.display(), format_name(fmt), bits, channels),
         })
     } else {
-        let decoded = ffmpeg::decode_raw(path)?;
+        let decoded = decode_with(engine, path)?;
         let spec: PcmSpec = decoded.spec;
-        let bits = args.bits.unwrap_or(u32::from(spec.bits_valid));
+        let bits = p.bits.unwrap_or(u32::from(spec.bits_valid));
         Ok(Loaded {
             samples: pcm::unpack(&decoded.pcm, spec.format, bits)?,
             bits,
@@ -255,8 +363,20 @@ fn load_stream(path: &Path, args: &CompareArgs) -> Result<Loaded> {
 }
 
 fn cmd_compare(args: &CompareArgs) -> Result<ExitCode> {
-    let mut a = load_stream(&args.a, args)?;
-    let mut b = load_stream(&args.b, args)?;
+    let a_params = RawParams {
+        raw_format: args.raw_format,
+        bits: args.bits,
+        channels: args.channels,
+    };
+    // B defaults to A's parameters; the *_b overrides let a tap (e.g. 24-in-32) be
+    // compared against a packed-24 golden.
+    let b_params = RawParams {
+        raw_format: args.raw_format_b.or(args.raw_format),
+        bits: args.bits_b.or(args.bits),
+        channels: args.channels_b.or(args.channels),
+    };
+    let mut a = load_stream(&args.a, &a_params, args.engine)?;
+    let mut b = load_stream(&args.b, &b_params, args.engine)?;
 
     if a.channels != b.channels {
         bail!(

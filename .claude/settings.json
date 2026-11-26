@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Read", "Glob", "Grep", "Edit", "Write", "TodoWrite", "Agent", "Task",
+      "WebSearch", "WebFetch", "Bash", "PowerShell"
+    ],
+    "deny": [
+      "Edit(//c/SoulSeek_Music/**)", "Write(//c/SoulSeek_Music/**)",
+      "Edit(//c/Users/LENOVO/AppData/Roaming/foobar2000-v2/**)",
+      "Write(//c/Users/LENOVO/AppData/Roaming/foobar2000-v2/**)",
+      "Edit(//c/Users/LENOVO/AppData/Local/Lyra Turntable/**)",
+      "Write(//c/Users/LENOVO/AppData/Local/Lyra Turntable/**)",
+      "Read(//c/Users/LENOVO/.ssh/**)",
+      "Bash(git push:*)", "Bash(git reset --hard:*)", "Bash(git clean:*)",
+      "Bash(winget uninstall:*)", "Bash(shutdown:*)"
+    ]
+  }
+}

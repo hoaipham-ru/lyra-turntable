@@ -40,6 +40,15 @@ $ReportDir   = Join-Path $RepoRoot 'target\parity\reports'
 $ManifestDir = Join-Path $RepoRoot 'tests\parity\manifests'
 if (-not (Test-Path $ReportDir)) { New-Item -ItemType Directory -Force -Path $ReportDir | Out-Null }
 
+# P1 has a dedicated decode-parity suite (p1.ps1). Delegate to it so
+# `run.ps1 -Phase P1` exercises lyra-decode against the golden references.
+if ($Phase -eq 'P1') {
+    $p1 = Join-Path $PSScriptRoot 'p1.ps1'
+    $fwd = @{}
+    if ($GoldenManifest) { $fwd['GoldenManifest'] = $GoldenManifest }
+    return & $p1 @fwd
+}
+
 function Get-ToolVersion([string]$name, [string]$arg) {
     $cmd = Get-Command $name -ErrorAction SilentlyContinue
     if (-not $cmd) { return "${name}: not found" }
