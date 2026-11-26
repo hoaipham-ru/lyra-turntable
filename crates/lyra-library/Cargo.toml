@@ -6,6 +6,8 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+lofty = "0.25.5"
 lyra-core = { path = "../lyra-core" }
 lyra-decode = { path = "../lyra-decode" }
 lyra-dsd = { path = "../lyra-dsd" }
+rusqlite = { version = "0.43.0", features = ["bundled"] }
