@@ -19,6 +19,12 @@ use std::time::Duration;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, RunEvent};
+
+// Native playback engine surface (P4): engine control + events, device
+// enumeration, app settings, and the playlist/tag/artwork command stubs.
+mod engine;
+mod library;
+mod settings;
 use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetWindowTextLengthW, GetWindowThreadProcessId, IsWindowVisible, SetForegroundWindow, ShowWindow,
@@ -217,7 +223,34 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![fb_add, fb_command, take_pending, quit_app])
+        .manage(engine::EngineState::default())
+        .invoke_handler(tauri::generate_handler![
+            // foobar2000 backend (unchanged)
+            fb_add,
+            fb_command,
+            take_pending,
+            quit_app,
+            // native engine control + events
+            engine::engine_start,
+            engine::engine_send,
+            engine::engine_shutdown,
+            engine::engine_running,
+            engine::devices,
+            // app settings
+            settings::settings_get,
+            settings::settings_set,
+            // playlist / tag / artwork (P4.2 wiring pending)
+            library::playlists_list,
+            library::playlists_create,
+            library::playlists_items,
+            library::playlists_add,
+            library::playlists_remove,
+            library::playlists_clear,
+            library::playlists_import_m3u,
+            library::playlists_export_m3u,
+            library::tags_read,
+            library::artwork_read,
+        ])
         .setup(|app| {
             thread::spawn(register_open_with);
             if !foobar_running() {
@@ -265,8 +298,10 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building the app");
 
-    app.run(|_app, event| {
+    app.run(|app, event| {
         if let RunEvent::Exit = event {
+            // Release the audio device and join the event thread before we go.
+            engine::shutdown_on_exit(app);
             if STARTED_BY_APP.load(Ordering::SeqCst) {
                 let _ = Command::new(FOOBAR).arg("/exit").creation_flags(CREATE_NO_WINDOW).status();
             }
