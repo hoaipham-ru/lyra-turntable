@@ -9,7 +9,10 @@
 //! * **P4.2 (added here):** read-only metadata ([`read_tags`] → [`TrackMeta`]),
 //!   cover art ([`fn@artwork`] → [`Artwork`]) and the SQLite-backed [`Playlists`]
 //!   store with `m3u`/`m3u8` import/export and Default Playlist primitives.
-//! * Full foobar2000 metadata parity and `.fpl` import arrive in P6.
+//! * **P6.3 (added here):** best-effort import of foobar2000 playlists —
+//!   [`Playlists::import_fplite`] (v2 text format), [`Playlists::import_fpl`]
+//!   (classic binary, scan-based) and [`Playlists::migrate_foobar_playlists`]
+//!   (every playlist from a `%APPDATA%\foobar2000-v2` profile, read-only).
 
 #![warn(missing_docs)]
 #![forbid(unsafe_code)]
@@ -21,5 +24,5 @@ pub mod tags;
 
 pub use artwork::{artwork, Artwork};
 pub use cue::{parse_cue, CueFile, CueSheet, CueTrack};
-pub use playlists::{Playlist, Playlists, DEFAULT_PLAYLIST_TITLE};
+pub use playlists::{ImportSummary, Playlist, Playlists, DEFAULT_PLAYLIST_TITLE};
 pub use tags::{read_tags, TrackMeta};
