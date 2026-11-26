@@ -49,14 +49,29 @@ fn parse(file: &mut File, file_len: u64) -> Result<Dff> {
     let mut metadata: Option<MetadataRegion> = None;
 
     let mut pos = 16u64;
-    while pos + 12 <= inner_end {
+    // `pos.saturating_add(12)` never overflows; combined with the per-chunk bound
+    // check below, `pos` stays within `[16, inner_end]`.
+    while pos.saturating_add(12) <= inner_end {
         let ch = match util::read_at(file, pos, 12) {
             Ok(b) => b,
             Err(_) => break, // tolerate trailing junk
         };
         let id = &ch[0..4];
         let size = be_u64(&ch, 4)?;
+        // `pos + 12 <= inner_end <= file_len`, so `data_at` cannot overflow.
         let data_at = pos + 12;
+
+        // The chunk body is a file-controlled length: reject (never trust) any
+        // size that would run past the enclosing form / file so the advance math
+        // below cannot overflow (B1) and no offset points outside the file.
+        let data_end = data_at.checked_add(size).ok_or_else(|| {
+            LyraError::Decode(format!("DFF chunk at {pos}: size {size} overflows file offset"))
+        })?;
+        if data_end > inner_end {
+            return Err(LyraError::Decode(format!(
+                "DFF chunk at {pos}: size {size} runs past form/file end {inner_end}"
+            )));
+        }
 
         match id {
             b"PROP" => {
@@ -84,8 +99,13 @@ fn parse(file: &mut File, file_len: u64) -> Result<Dff> {
             _ => {}
         }
 
-        // Advance past the data, honouring the even-boundary pad byte.
-        pos = data_at + size + (size & 1);
+        // Advance past the data, honouring the even-boundary pad byte. `data_end`
+        // is already `<= inner_end`; the pad may legitimately reach `inner_end + 1`
+        // on the final odd-sized chunk, which simply ends the loop.
+        pos = match data_end.checked_add(size & 1) {
+            Some(p) => p,
+            None => break,
+        };
     }
 
     if compressed {
@@ -138,6 +158,8 @@ fn parse_prop(
         let id = &prop[p..p + 4];
         let size = be_u64(prop, p + 4)? as usize;
         let data_at = p + 12;
+        // Bound the (file-controlled) size to the in-memory PROP slice; a sub-chunk
+        // claiming more than PROP holds ends the walk rather than indexing OOB.
         let end = data_at.saturating_add(size);
         if end > prop.len() {
             break;
@@ -154,7 +176,9 @@ fn parse_prop(
             }
             _ => {}
         }
-        p = data_at + size + (size & 1);
+        // `end <= prop.len()` already; advance past the pad byte (saturating so a
+        // trailing odd-sized sub-chunk cannot overflow `p`).
+        p = end.saturating_add(size & 1);
     }
     Ok(())
 }
