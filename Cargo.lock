@@ -5235,6 +5235,7 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 name = "turntable"
 version = "0.3.0"
 dependencies = [
+ "base64 0.22.1",
  "lyra-core",
  "lyra-engine",
  "lyra-library",
