@@ -38,7 +38,7 @@ use windows::Win32::Media::Audio::AUDCLNT_E_DEVICE_INVALIDATED;
 use crate::handle::OutputHandle;
 use crate::mmcss::ProAudioGuard;
 use crate::negotiate::{negotiate_exclusive, ExclusiveFormat, PROBE_CANDIDATES};
-use crate::ring::{pull_into, silence};
+use crate::ring::{pull_into, service_flush, silence};
 use crate::stats::SharedStats;
 use crate::tap::{make_tap, TapDrain, TapWriter};
 use crate::types::{DeviceId, DeviceInfo, DeviceProbe, OutputOptions, PROBE_RATES};
@@ -492,6 +492,13 @@ fn run_loop(run: &mut RunState, stats: &SharedStats, stop: &std::sync::atomic::A
             }
         }
 
+        // Discard-on-seek (reviewer B1): if the owner requested a flush, drain the
+        // ring to empty here — only this thread owns the consumer. The buffer we
+        // render this iteration after an empty ring is deliberate silence, so the
+        // underrun it would otherwise flag is suppressed below. Wait-free, no alloc.
+        let flushed =
+            service_flush(&mut run.consumer, &mut run.scratch, &stats.flush_req, &stats.flush_ack);
+
         let avail = match run.client.get_available_space_in_frames() {
             Ok(a) => a as usize,
             Err(e) => {
@@ -515,7 +522,9 @@ fn run_loop(run: &mut RunState, stats: &SharedStats, stop: &std::sync::atomic::A
         match run.render.write_to_device(frames, data, None) {
             Ok(()) => {
                 stats.frames_played.fetch_add(frames as u64, Ordering::Relaxed);
-                if pull.underrun {
+                // A flush this iteration means the gap is an intentional discard,
+                // not the producer falling behind: do not count it as an underrun.
+                if pull.underrun && !flushed {
                     stats.underruns.fetch_add(1, Ordering::Relaxed);
                 }
             }

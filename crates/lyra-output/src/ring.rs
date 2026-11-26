@@ -11,7 +11,59 @@
 //! multiple, and the producer only ever writes whole frames, so the ring never
 //! splits a frame across a pull.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use rtrb::Consumer;
+
+/// Service a pending flush request from the feeder (render) thread.
+///
+/// This is the RT-safe half of the producer→feeder flush handshake (reviewer
+/// finding B1): the owner side bumps `flush_req` via
+/// [`crate::OutputHandle::flush`], and the feeder — which *owns* the ring
+/// consumer — is the only thread allowed to move the read pointer, so it must do
+/// the discard here.
+///
+/// If a new flush generation is pending (`flush_req > flush_ack`), drain the
+/// consumer to empty by repeatedly popping into the caller-owned `scratch` and
+/// throwing the bytes away, then publish the serviced generation into
+/// `flush_ack`. Returns `true` when a flush was serviced this call, so the caller
+/// can **suppress the underrun** for the buffer it is about to zero-fill (the gap
+/// is an intentional discard, not the producer falling behind). Returns `false`
+/// when nothing was pending (a cheap pair of atomic loads).
+///
+/// Real-time safe: no allocation, no locks, no logging, no syscalls.
+/// [`Consumer::pop_partial_slice`] is a lock-free memcpy into existing memory, and
+/// the only shared state touched is two atomics. Legal on the MMCSS "Pro Audio"
+/// render thread (PLAN §5).
+///
+/// Discarded bytes were never handed to the device, so `frames_played` is
+/// untouched here — only the device write path advances it.
+#[must_use]
+pub fn service_flush(
+    consumer: &mut Consumer<u8>,
+    scratch: &mut [u8],
+    flush_req: &AtomicU64,
+    flush_ack: &AtomicU64,
+) -> bool {
+    // Observe the requested generation first; only ack a value we have seen.
+    let target = flush_req.load(Ordering::Acquire);
+    if target <= flush_ack.load(Ordering::Acquire) {
+        return false; // nothing pending
+    }
+    // Drain the ring to empty: pop into the throwaway scratch until it yields
+    // nothing. Wait-free; no allocation.
+    loop {
+        let (popped, _remainder) = consumer.pop_partial_slice(scratch);
+        if popped.is_empty() {
+            break;
+        }
+    }
+    // Publish: the owner side waits for flush_ack >= its target. Store exactly the
+    // generation we observed (a later request bumps flush_req again and will be
+    // serviced on a subsequent iteration).
+    flush_ack.store(target, Ordering::Release);
+    true
+}
 
 /// Result of one feeder pull.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -151,6 +203,47 @@ mod tests {
         assert_eq!(r.bytes_from_ring, 6);
         assert!(!r.underrun);
         assert_eq!(scratch, [10, 11, 12, 13, 14, 15]);
+    }
+
+    #[test]
+    fn service_flush_no_request_is_noop() {
+        let (mut p, mut c) = RingBuffer::<u8>::new(16);
+        p.push_entire_slice(&[1, 2, 3, 4]).unwrap();
+        let req = AtomicU64::new(0);
+        let ack = AtomicU64::new(0);
+        let mut scratch = [0u8; 8];
+        let serviced = service_flush(&mut c, &mut scratch, &req, &ack);
+        assert!(!serviced, "no pending request -> no-op");
+        assert_eq!(ack.load(Ordering::Acquire), 0);
+        // The bytes are untouched: a normal pull still sees them.
+        assert_eq!(c.slots(), 4);
+    }
+
+    #[test]
+    fn service_flush_drains_ring_and_acks() {
+        // Ring holds more than one scratch-full so the drain loop must iterate.
+        let (mut p, mut c) = RingBuffer::<u8>::new(64);
+        let data: Vec<u8> = (0..50u8).collect();
+        p.push_entire_slice(&data).unwrap();
+        let req = AtomicU64::new(1); // owner requested generation 1
+        let ack = AtomicU64::new(0);
+        let mut scratch = [0u8; 8]; // smaller than the ring contents
+        let serviced = service_flush(&mut c, &mut scratch, &req, &ack);
+        assert!(serviced, "pending request -> serviced, caller suppresses underrun");
+        assert_eq!(c.slots(), 0, "ring fully drained");
+        assert_eq!(ack.load(Ordering::Acquire), 1, "ack bumped to requested gen");
+        // A second call with no further request is a no-op.
+        assert!(!service_flush(&mut c, &mut scratch, &req, &ack));
+    }
+
+    #[test]
+    fn service_flush_acks_only_observed_generation() {
+        let (_p, mut c) = RingBuffer::<u8>::new(16);
+        let req = AtomicU64::new(3);
+        let ack = AtomicU64::new(1);
+        let mut scratch = [0u8; 8];
+        assert!(service_flush(&mut c, &mut scratch, &req, &ack));
+        assert_eq!(ack.load(Ordering::Acquire), 3, "collapses skipped generations");
     }
 
     #[test]

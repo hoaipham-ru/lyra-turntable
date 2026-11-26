@@ -18,6 +18,14 @@ pub struct SharedStats {
     pub underruns: AtomicU64,
     /// Set once if the device was invalidated / removed mid-stream.
     pub device_lost: AtomicBool,
+    /// Flush generation **requested** by the owner side ([`crate::OutputHandle::flush`]).
+    /// The producer bumps this to ask the feeder to discard all unplayed bytes in
+    /// the ring. Monotonically increasing; starts at 0.
+    pub flush_req: AtomicU64,
+    /// Flush generation **acknowledged** by the feeder thread once it has drained
+    /// the ring. The owner side waits for `flush_ack >= flush_req` to know the
+    /// discard is complete. Only the feeder thread writes this; starts at 0.
+    pub flush_ack: AtomicU64,
 }
 
 impl SharedStats {
