@@ -19,14 +19,15 @@ tauri-plugin-single-instance = "2"
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Encodes embedded cover art as a base64 `data:` URL for `artwork_read`.
+base64 = "0.22"
 
 # Native playback engine (P4). These let the webview drive lyra-engine end to end.
 lyra-core = { path = "../crates/lyra-core" }
 lyra-output = { path = "../crates/lyra-output" }
 lyra-engine = { path = "../crates/lyra-engine" }
-# Used by the playlist/tag/artwork command wrappers. P4.2 fills in the real API
-# (Playlists store, read_tags, artwork); until then those commands are compile-safe
-# stubs, see src/library.rs.
+# Backs the playlist/tag/artwork commands in src/library.rs (Playlists store,
+# read_tags, artwork), wired to the real API in P4.3.
 lyra-library = { path = "../crates/lyra-library" }
 
 # NOTE: the `[profile.release]` section moved to the workspace root Cargo.toml.
