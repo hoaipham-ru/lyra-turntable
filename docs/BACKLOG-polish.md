@@ -96,3 +96,9 @@ untrusted input, no licence problem. These nits were parked:
   rate/format (16/44.1, 24/96, 24/192 FLAC, DSD64 via DoP and DSD->PCM) through both Lyra and foobar2000
   into the same capture path and confirm bit-identical output. Procedure: lyra-engine HUMAN-CHECKS H2.1 / H8.2.
   Also do the CPU <= foobar2000 x 1.2 comparison from P8.3 then (needs foobar2000 running in WASAPI exclusive).
+## Deferred test: ASIO on Sony Walkman NW-A55 (noted 2026-11-26)
+
+- [ ] **ASIO via Sony USB Audio driver** - install the Sony driver, put the NW-A55 in USB DAC mode, run Lyra with
+  ASIO output for FLAC 16/44.1, 24/96, 24/192 and DSD64. Check bit-perfect, underruns, and which DSD path is chosen.
+  Also try DoP if a forced-DoP option exists (earphones off). Procedure: lyra-engine HUMAN-CHECKS H8.3.
+  Already passed on the Walkman via WASAPI exclusive: PCM 44.1/96/192 bit-perfect, 0 underruns.
