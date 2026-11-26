@@ -254,7 +254,11 @@ pub fn run() {
         ])
         .setup(|app| {
             thread::spawn(register_open_with);
-            if !foobar_running() {
+            // Open-with registration is backend-agnostic (it just launches Lyra), but
+            // foobar2000 itself must NOT be started when the native engine is selected
+            // (P4.5): the native backend owns playback and two players never sound at once.
+            let native = settings::load(app.handle()).backend == "native";
+            if !native && !foobar_running() {
                 if let Ok(child) = Command::new(FOOBAR).arg("/hide").creation_flags(CREATE_NO_WINDOW).spawn() {
                     STARTED_BY_APP.store(true, Ordering::SeqCst);
                     FOOBAR_PID.store(child.id(), Ordering::SeqCst);
@@ -263,9 +267,12 @@ pub fn run() {
             }
 
             let started = STARTED_BY_APP.load(Ordering::SeqCst);
-            let play = MenuItem::with_id(app, "play", "Phát / Tạm dừng", true, None::<&str>)?;
-            let next = MenuItem::with_id(app, "next", "Bài tiếp", true, None::<&str>)?;
-            let prev = MenuItem::with_id(app, "prev", "Bài trước", true, None::<&str>)?;
+            // The tray transport items drive foobar2000 (and would start it on demand),
+            // so disable them in native mode — the window's own transport controls the engine.
+            let fb_transport = !native;
+            let play = MenuItem::with_id(app, "play", "Phát / Tạm dừng", fb_transport, None::<&str>)?;
+            let next = MenuItem::with_id(app, "next", "Bài tiếp", fb_transport, None::<&str>)?;
+            let prev = MenuItem::with_id(app, "prev", "Bài trước", fb_transport, None::<&str>)?;
             let sep1 = PredefinedMenuItem::separator(app)?;
             let show = MenuItem::with_id(app, "show", "Hiện Lyra", true, None::<&str>)?;
             let fb = MenuItem::with_id(app, "foobar", "Hiện / ẩn cửa sổ foobar2000", started, None::<&str>)?;

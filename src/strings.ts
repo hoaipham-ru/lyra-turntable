@@ -54,6 +54,12 @@ const vi = {
   // Bit-perfect badge.
   badgeTitleBitPerfect: "Bit-perfect: phát nguyên vẹn tới DAC", // bit-perfect passthrough
   badgeTitleProcessed: "Không bit-perfect: tín hiệu bị xử lý", // processed / not bit-perfect
+
+  // P4.5 backend switching.
+  engineStarting: "Đang khởi động Lyra…", // native engine warming up (title fallback)
+  backendNotReady: "Chưa sẵn sàng bộ máy phát", // the active backend is not connected yet
+  savePlaylistTitle: "Lưu playlist", // native m3u export save-dialog title
+  playlistSaved: "Đã lưu playlist", // toast after a native m3u export
 };
 
 const en: typeof vi = {
@@ -90,6 +96,11 @@ const en: typeof vi = {
 
   badgeTitleBitPerfect: "Bit-perfect: untouched passthrough to the DAC",
   badgeTitleProcessed: "Not bit-perfect: the signal is processed",
+
+  engineStarting: "Starting Lyra…",
+  backendNotReady: "Player backend not ready",
+  savePlaylistTitle: "Save playlist",
+  playlistSaved: "Playlist saved",
 };
 
 const tables = { vi, en };
