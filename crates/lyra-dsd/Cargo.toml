@@ -4,5 +4,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+description = "S03 — Lyra DSD: uncompressed DSF/DFF readers and the DoP packer (ADR-008)."
 
 [dependencies]
+lyra-core = { path = "../lyra-core" }
+
+[dev-dependencies]
