@@ -58,6 +58,15 @@ if ($Phase -eq 'P3') {
     return & $p3 @fwd
 }
 
+# P6 has a dedicated library/metadata-parity gate (p6.ps1): §6 metadata (meta vs
+# foobar2000 or internal consistency), artwork, playlist migration, immutability.
+if ($Phase -eq 'P6') {
+    $p6 = Join-Path $PSScriptRoot 'p6.ps1'
+    $fwd = @{}
+    if ($GoldenManifest) { $fwd['GoldenManifest'] = $GoldenManifest }
+    return & $p6 @fwd
+}
+
 function Get-ToolVersion([string]$name, [string]$arg) {
     $cmd = Get-Command $name -ErrorAction SilentlyContinue
     if (-not $cmd) { return "${name}: not found" }

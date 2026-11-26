@@ -14,6 +14,7 @@ path = "src/main.rs"
 lyra-core = { path = "../../crates/lyra-core" }
 lyra-decode = { path = "../../crates/lyra-decode" }
 lyra-dsd = { path = "../../crates/lyra-dsd" }
+lyra-library = { path = "../../crates/lyra-library" }
 clap = { version = "4", features = ["derive"] }
 sha2 = "0.10"
 serde = { version = "1", features = ["derive"] }

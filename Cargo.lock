@@ -2651,6 +2651,7 @@ dependencies = [
  "lyra-core",
  "lyra-decode",
  "lyra-dsd",
+ "lyra-library",
  "serde",
  "serde_json",
  "sha2 0.10.9",
