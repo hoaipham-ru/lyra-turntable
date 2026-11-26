@@ -29,6 +29,7 @@ mod dsd;
 mod dsd_hash;
 mod engine;
 mod ffmpeg;
+mod meta;
 mod mute;
 mod pcm;
 
@@ -58,12 +59,22 @@ enum Commands {
     Align,
     /// [P2] Capture device-boundary bytes via the S04 helper.
     Capture,
-    /// [P0.6] Dump a file's TrackMeta as JSON.
-    Meta,
+    /// Dump a file's foobar2000-parity metadata (TEST-STRATEGY §6) as text/JSON.
+    Meta(MetaArgs),
     /// Control the endpoint mute flag for the Sound rule (does not touch samples).
     Mute(MuteArgs),
     /// [P5] DSD helpers: convert DFF -> DSF fixtures (writes under target/ only).
     Dsd(DsdArgs),
+}
+
+#[derive(Parser)]
+struct MetaArgs {
+    /// Input audio file (FLAC/WAV/MP3/… or a DSF/DFF DSD file).
+    input: PathBuf,
+    /// Emit a JSON object keyed by the TEST-STRATEGY §6 columns (plus `_`-prefixed
+    /// diagnostics) for the comparison harness. Omit for human-readable text.
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Parser)]
@@ -234,7 +245,7 @@ fn main() -> ExitCode {
         Commands::Compare(a) => cmd_compare(&a),
         Commands::Align => stub("align", "P2"),
         Commands::Capture => stub("capture", "P2"),
-        Commands::Meta => stub("meta", "P0.6"),
+        Commands::Meta(a) => meta::run(&a.input, a.json),
         Commands::Mute(a) => mute::run(a.action.into(), a.device.as_deref()),
         Commands::Dsd(a) => cmd_dsd(&a),
     };
