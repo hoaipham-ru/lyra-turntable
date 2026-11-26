@@ -23,9 +23,33 @@
 //! # Formats
 //! `.m3u`/`.m3u8` import and export are fully supported (UTF-8, optional `#EXTINF`
 //! lines ignored on import, relative paths resolved against the playlist file's
-//! directory). foobar2000's `.fpl` is undocumented, so [`Playlists::import_fpl`] is
-//! a best-effort stub that reports an [`LyraError::UnsupportedFormat`] rather than
-//! guessing paths; full `.fpl` support is deferred to P6.
+//! directory).
+//!
+//! ## foobar2000 import (P6.3)
+//! foobar2000 **v2** keeps its playlists under
+//! `%APPDATA%\foobar2000-v2\playlists-v2.0\` as `playlist-<GUID>.fplite` files.
+//! Inspecting the real profile (read-only) showed these are **not** SQLite
+//! databases as first assumed, but a trivial UTF-8 text format:
+//!
+//! ```text
+//! <BOM>file://C:\Users\me\Music\track1.mp3\n
+//! file://C:\Users\me\Music\track2.flac\n
+//! ...
+//! ```
+//!
+//! i.e. an optional UTF-8 BOM followed by one location string per LF-terminated
+//! line, in playback order. The sibling `playlist-<GUID>-props.sqlite` *is* real
+//! SQLite but holds only per-playlist properties (GUID-keyed blobs, focus marker),
+//! not the track list, so it is ignored. `index.txt` maps `GUID:title` in playlist
+//! order and drives [`Playlists::migrate_foobar_playlists`].
+//!
+//! [`Playlists::import_fplite`] parses that text format (best-effort: unresolvable
+//! lines are counted and skipped, never fatal). The classic binary `.fpl`
+//! (foobar2000 v1.x) is undocumented; [`Playlists::import_fpl`] is a genuine
+//! best-effort scan for embedded `file://` UTF-8 location strings. Both report an
+//! [`ImportSummary`] (imported vs skipped). If an `.fplite` is ever found to carry
+//! the SQLite magic instead of text, it is reported as
+//! [`LyraError::UnsupportedFormat`] rather than guessed.
 
 use std::path::Path;
 
@@ -47,6 +71,21 @@ pub struct Playlist {
     pub is_current: bool,
     /// Ordering position among playlists (0-based, contiguous).
     pub position: i64,
+}
+
+/// Outcome of a best-effort foobar2000 playlist import.
+///
+/// `imported` counts the location strings that became playlist items (in order);
+/// `skipped` counts lines/segments that could not be resolved to a location and
+/// were tolerated rather than aborting the whole import.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportSummary {
+    /// Id of the created Lyra playlist.
+    pub playlist_id: i64,
+    /// Number of items added, in stored order.
+    pub imported: usize,
+    /// Number of unresolvable entries that were skipped.
+    pub skipped: usize,
 }
 
 /// A SQLite-backed playlist store.
@@ -407,17 +446,137 @@ impl Playlists {
             .map_err(|e| LyraError::Io(format!("writing m3u {}: {e}", path.display())))
     }
 
-    /// Best-effort `.fpl` import. foobar2000's `.fpl` format is undocumented, so
-    /// rather than guess paths this reports the format as unsupported for now;
-    /// real parsing is deferred to P6.
+    /// Import a foobar2000 playlist, dispatching on the file extension:
+    /// `.fplite` (v2 text format) → [`import_fplite`](Self::import_fplite),
+    /// `.fpl` (classic binary) → [`import_fpl`](Self::import_fpl). Returns the new
+    /// playlist's id.
     ///
     /// # Errors
-    /// Always returns [`LyraError::UnsupportedFormat`].
+    /// Returns [`LyraError::UnsupportedFormat`] for any other extension, or the
+    /// underlying importer's error.
+    pub fn import_foobar_playlist(&mut self, path: &Path) -> Result<i64> {
+        match path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref() {
+            Some("fplite") => self.import_fplite(path),
+            Some("fpl") => self.import_fpl(path),
+            _ => Err(LyraError::UnsupportedFormat(format!(
+                "not a foobar2000 playlist (expected .fplite or .fpl): {}",
+                path.display()
+            ))),
+        }
+    }
+
+    /// Import a foobar2000 **v2** `.fplite` playlist, returning the new playlist id.
+    ///
+    /// The playlist is named after the file stem. See
+    /// [`import_fplite_report`](Self::import_fplite_report) for the skipped-entry
+    /// count.
+    ///
+    /// # Errors
+    /// Returns [`LyraError::Io`] if the file cannot be read or a database error
+    /// occurs, or [`LyraError::UnsupportedFormat`] if the file is a SQLite database
+    /// rather than the expected text format.
+    pub fn import_fplite(&mut self, path: &Path) -> Result<i64> {
+        self.import_fplite_report(path).map(|s| s.playlist_id)
+    }
+
+    /// Import a `.fplite` playlist and report how many entries were imported vs
+    /// skipped. Best-effort: unresolvable lines are skipped, never fatal.
+    ///
+    /// # Errors
+    /// Returns [`LyraError::Io`] if the file cannot be read or a database error
+    /// occurs, or [`LyraError::UnsupportedFormat`] if the file carries the SQLite
+    /// magic instead of the expected text format.
+    pub fn import_fplite_report(&mut self, path: &Path) -> Result<ImportSummary> {
+        let title = fplite_title(path);
+        self.import_fplite_with_title(path, &title)
+    }
+
+    /// Import a `.fplite` playlist under an explicit `title` (used by migration so
+    /// the title comes from `index.txt`, not the GUID file name).
+    fn import_fplite_with_title(&mut self, path: &Path, title: &str) -> Result<ImportSummary> {
+        let bytes = std::fs::read(path)
+            .map_err(|e| LyraError::Io(format!("reading fplite {}: {e}", path.display())))?;
+        if bytes.starts_with(SQLITE_MAGIC) {
+            return Err(LyraError::UnsupportedFormat(format!(
+                ".fplite is a SQLite database, not the expected text format \
+                 (schema unknown, not guessing): {}",
+                path.display()
+            )));
+        }
+        let (items, skipped) = parse_fplite_text(&bytes);
+        self.store_import(title, items, skipped)
+    }
+
+    /// Best-effort import of a classic binary `.fpl` (foobar2000 v1.x). The format
+    /// is undocumented; this scans the bytes for embedded `file://` UTF-8 location
+    /// strings in order. Returns the new playlist id.
+    ///
+    /// # Errors
+    /// Returns [`LyraError::Io`] if the file cannot be read or a database error
+    /// occurs.
     pub fn import_fpl(&mut self, path: &Path) -> Result<i64> {
-        Err(LyraError::UnsupportedFormat(format!(
-            ".fpl import is not supported yet (undocumented format): {}",
-            path.display()
-        )))
+        self.import_fpl_report(path).map(|s| s.playlist_id)
+    }
+
+    /// Best-effort `.fpl` import, reporting imported vs skipped counts.
+    ///
+    /// # Errors
+    /// Returns [`LyraError::Io`] if the file cannot be read or a database error
+    /// occurs.
+    pub fn import_fpl_report(&mut self, path: &Path) -> Result<ImportSummary> {
+        let bytes = std::fs::read(path)
+            .map_err(|e| LyraError::Io(format!("reading fpl {}: {e}", path.display())))?;
+        let title = fplite_title(path);
+        let (items, skipped) = scan_fpl_locations(&bytes);
+        self.store_import(&title, items, skipped)
+    }
+
+    /// Create a playlist named `title` and append `items`, returning a summary.
+    fn store_import(
+        &mut self,
+        title: &str,
+        items: Vec<TrackRef>,
+        skipped: usize,
+    ) -> Result<ImportSummary> {
+        let imported = items.len();
+        let id = self.create(title, false)?;
+        self.add_items(id, &items)?;
+        Ok(ImportSummary { playlist_id: id, imported, skipped })
+    }
+
+    /// Migrate every foobar2000 **v2** playlist from a profile directory.
+    ///
+    /// Reads `<profile_dir>/playlists-v2.0/index.txt` (lines `GUID:title`, in
+    /// playlist order) and imports each `playlist-<GUID>.fplite` in that order,
+    /// naming it from `index.txt`. Returns one `(title, result)` pair per playlist
+    /// so per-playlist failures are **reported, not guessed** (a missing or
+    /// unparseable file fails only its own entry). The profile is only ever read.
+    ///
+    /// Intended to be run once by the caller; this function performs the import but
+    /// keeps no "already migrated" state of its own.
+    ///
+    /// # Errors
+    /// Returns [`LyraError::Io`] if `playlists-v2.0\index.txt` cannot be read. A
+    /// per-playlist import error is carried in the returned vector, not propagated.
+    pub fn migrate_foobar_playlists(
+        &mut self,
+        profile_dir: &Path,
+    ) -> Result<Vec<(String, std::result::Result<ImportSummary, LyraError>)>> {
+        let dir = profile_dir.join("playlists-v2.0");
+        let index = dir.join("index.txt");
+        let bytes = std::fs::read(&index)
+            .map_err(|e| LyraError::Io(format!("reading {}: {e}", index.display())))?;
+        let mut out = Vec::new();
+        for (guid, title) in parse_index(&bytes) {
+            let file = dir.join(format!("playlist-{guid}.fplite"));
+            let result = if file.exists() {
+                self.import_fplite_with_title(&file, &title)
+            } else {
+                Err(LyraError::Io(format!("missing playlist file {}", file.display())))
+            };
+            out.push((title, result));
+        }
+        Ok(out)
     }
 }
 
@@ -451,6 +610,121 @@ fn resolve_entry(base_dir: Option<&Path>, entry: &str) -> String {
         Some(dir) => dir.join(p).to_string_lossy().into_owned(),
         None => entry.to_string(),
     }
+}
+
+/// The first 16 bytes of every SQLite 3 database file.
+const SQLITE_MAGIC: &[u8] = b"SQLite format 3\0";
+
+/// A UTF-8 byte-order mark.
+const UTF8_BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
+
+/// Derive a playlist title from a `.fplite`/`.fpl` path's file stem.
+fn fplite_title(path: &Path) -> String {
+    path.file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("Imported Playlist")
+        .to_string()
+}
+
+/// Parse foobar2000 v2 `.fplite` text bytes into `(items, skipped)`.
+///
+/// Strips a leading UTF-8 BOM, then treats each non-empty line as a location
+/// string (see [`location_to_path`]). Blank lines are ignored; lines that resolve
+/// to nothing (e.g. a bare `file://`) are counted as skipped.
+fn parse_fplite_text(bytes: &[u8]) -> (Vec<TrackRef>, usize) {
+    let body = bytes.strip_prefix(UTF8_BOM).unwrap_or(bytes);
+    let text = String::from_utf8_lossy(body);
+    let mut items = Vec::new();
+    let mut skipped = 0;
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.is_empty() {
+            continue;
+        }
+        match location_to_path(line) {
+            Some(path) => items.push(TrackRef::file(path)),
+            None => skipped += 1,
+        }
+    }
+    (items, skipped)
+}
+
+/// Best-effort scan of a classic binary `.fpl` for `file://` location strings.
+///
+/// Returns `(items, skipped)` in file order. Each `file://` occurrence is read up
+/// to the next control byte (`< 0x20`, e.g. NUL/newline) and decoded as UTF-8;
+/// segments that are not valid UTF-8 or resolve to nothing are counted as skipped.
+fn scan_fpl_locations(bytes: &[u8]) -> (Vec<TrackRef>, usize) {
+    const NEEDLE: &[u8] = b"file://";
+    let mut items = Vec::new();
+    let mut skipped = 0;
+    let mut i = 0;
+    while let Some(rel) = find_subslice(&bytes[i..], NEEDLE) {
+        let start = i + rel;
+        let mut end = start;
+        while end < bytes.len() && bytes[end] >= 0x20 {
+            end += 1;
+        }
+        match std::str::from_utf8(&bytes[start..end]) {
+            Ok(seg) => match location_to_path(seg) {
+                Some(path) => items.push(TrackRef::file(path)),
+                None => skipped += 1,
+            },
+            Err(_) => skipped += 1,
+        }
+        i = if end > start { end } else { start + NEEDLE.len() };
+    }
+    (items, skipped)
+}
+
+/// Turn a foobar2000 location string into a filesystem path, or `None` to skip.
+///
+/// A `file://` prefix is stripped (foobar2000 writes `file://C:\...`, so the
+/// Windows path with backslashes is returned verbatim); a bare `file://` yields
+/// `None`. Any other string (e.g. a `http://` stream location) is kept verbatim.
+/// Sub-song indices are not represented in the v2 text format, so every item is a
+/// whole-file reference.
+fn location_to_path(loc: &str) -> Option<String> {
+    let loc = loc.trim();
+    if loc.is_empty() {
+        return None;
+    }
+    if let Some(rest) = loc.strip_prefix("file://") {
+        let rest = rest.trim();
+        if rest.is_empty() {
+            return None;
+        }
+        return Some(rest.to_string());
+    }
+    Some(loc.to_string())
+}
+
+/// Parse `index.txt` into `(guid, title)` pairs in file order.
+///
+/// Each line is `GUID:title`; the split is on the first `:` so a title may itself
+/// contain colons. Blank lines are ignored.
+fn parse_index(bytes: &[u8]) -> Vec<(String, String)> {
+    let body = bytes.strip_prefix(UTF8_BOM).unwrap_or(bytes);
+    let text = String::from_utf8_lossy(body);
+    let mut out = Vec::new();
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Some((guid, title)) = line.split_once(':') {
+            out.push((guid.trim().to_string(), title.trim().to_string()));
+        }
+    }
+    out
+}
+
+/// Find the first occurrence of `needle` in `hay`, byte-for-byte.
+fn find_subslice(hay: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || hay.len() < needle.len() {
+        return None;
+    }
+    hay.windows(needle.len()).position(|w| w == needle)
 }
 
 /// Wrap a `rusqlite` error as a [`LyraError::Io`] with a context message.
@@ -569,11 +843,150 @@ mod tests {
         assert_eq!(pl.item_count(id).unwrap(), 0);
     }
 
+    /// Build a `.fplite` byte blob: optional BOM + `file://`/raw lines (LF).
+    fn fplite_bytes(with_bom: bool, lines: &[&str]) -> Vec<u8> {
+        let mut v = Vec::new();
+        if with_bom {
+            v.extend_from_slice(&[0xEF, 0xBB, 0xBF]);
+        }
+        for l in lines {
+            v.extend_from_slice(l.as_bytes());
+            v.push(b'\n');
+        }
+        v
+    }
+
+    fn tmp_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("lyra_{tag}_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
     #[test]
-    fn fpl_is_unsupported() {
+    fn fplite_imports_in_order_and_strips_file_scheme() {
+        let dir = tmp_dir("fplite_order");
+        let path = dir.join("playlist-ABC.fplite");
+        // Non-ASCII path (mirrors the real profile) plus a bare file:// (skipped)
+        // and a stream URL (kept verbatim).
+        let bytes = fplite_bytes(
+            true,
+            &[
+                "file://C:\\Users\\LENOVO\\Downloads\\Saint-Saëns Mélodie.mp3",
+                "file://C:\\Music\\two.flac",
+                "file://",
+                "http://radio.example/stream",
+            ],
+        );
+        std::fs::write(&path, &bytes).unwrap();
+
         let mut pl = mem();
-        let err = pl.import_fpl(Path::new("x.fpl")).unwrap_err();
+        let summary = pl.import_fplite_report(&path).unwrap();
+        assert_eq!(summary.imported, 3);
+        assert_eq!(summary.skipped, 1, "bare file:// should be skipped");
+
+        let got = paths(&pl, summary.playlist_id);
+        assert_eq!(
+            got,
+            vec![
+                "C:\\Users\\LENOVO\\Downloads\\Saint-Saëns Mélodie.mp3".to_string(),
+                "C:\\Music\\two.flac".to_string(),
+                "http://radio.example/stream".to_string(),
+            ]
+        );
+        // Named after the file stem.
+        assert_eq!(pl.list().unwrap()[0].title, "playlist-ABC");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn fplite_sqlite_magic_is_reported_not_guessed() {
+        let dir = tmp_dir("fplite_sqlite");
+        let path = dir.join("playlist-SQL.fplite");
+        std::fs::write(&path, b"SQLite format 3\0rest-of-header").unwrap();
+        let mut pl = mem();
+        let err = pl.import_fplite(&path).unwrap_err();
         assert!(matches!(err, LyraError::UnsupportedFormat(_)), "got {err:?}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn fpl_binary_best_effort_scans_embedded_paths() {
+        // Classic .fpl blob: header junk, two valid file:// paths separated by NUL
+        // records, a file:// followed by invalid UTF-8 (skipped), then trailing junk.
+        let mut blob: Vec<u8> = Vec::new();
+        blob.extend_from_slice(&[0x01, 0x02, 0x00, 0x00]);
+        blob.extend_from_slice(b"file://C:\\Music\\a.flac");
+        blob.push(0x00);
+        blob.extend_from_slice(b"file://C:\\Music\\b.flac");
+        blob.push(0x00);
+        blob.extend_from_slice(b"file://");
+        blob.extend_from_slice(&[0xFF, 0xFE]); // invalid UTF-8 after the scheme
+        blob.push(0x00);
+        blob.extend_from_slice(&[0x10, 0x11]);
+
+        let dir = tmp_dir("fpl_bin");
+        let path = dir.join("legacy.fpl");
+        std::fs::write(&path, &blob).unwrap();
+
+        let mut pl = mem();
+        let summary = pl.import_fpl_report(&path).unwrap();
+        assert_eq!(summary.imported, 2);
+        assert_eq!(summary.skipped, 1);
+        assert_eq!(
+            paths(&pl, summary.playlist_id),
+            vec!["C:\\Music\\a.flac".to_string(), "C:\\Music\\b.flac".to_string()]
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn import_foobar_playlist_dispatches_by_extension() {
+        let mut pl = mem();
+        let err = pl.import_foobar_playlist(Path::new("x.txt")).unwrap_err();
+        assert!(matches!(err, LyraError::UnsupportedFormat(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn migrate_reads_index_order_and_reports_missing() {
+        let profile = tmp_dir("fb2k_profile");
+        let dir = profile.join("playlists-v2.0");
+        std::fs::create_dir_all(&dir).unwrap();
+        // Two playlists in index order; the second file is intentionally absent.
+        std::fs::write(
+            dir.join("index.txt"),
+            "GUID-1:Default Playlist\nGUID-2:hoai-test\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("playlist-GUID-1.fplite"),
+            fplite_bytes(true, &["file://C:\\one.flac", "file://C:\\two.flac"]),
+        )
+        .unwrap();
+
+        let mut pl = mem();
+        let report = pl.migrate_foobar_playlists(&profile).unwrap();
+        assert_eq!(report.len(), 2);
+        assert_eq!(report[0].0, "Default Playlist");
+        let s = report[0].1.as_ref().unwrap();
+        assert_eq!(s.imported, 2);
+        assert_eq!(pl.list().unwrap()[0].title, "Default Playlist");
+        // Second playlist's file is missing: reported as an error, not guessed.
+        assert_eq!(report[1].0, "hoai-test");
+        assert!(report[1].1.is_err());
+
+        std::fs::remove_dir_all(&profile).ok();
+    }
+
+    #[test]
+    fn index_parse_splits_on_first_colon() {
+        let got = parse_index(b"\xEF\xBB\xBFABC-123:Title: With Colon\n\nDEF:Plain\n");
+        assert_eq!(
+            got,
+            vec![
+                ("ABC-123".to_string(), "Title: With Colon".to_string()),
+                ("DEF".to_string(), "Plain".to_string()),
+            ]
+        );
     }
 
     #[test]
@@ -623,5 +1036,37 @@ mod tests {
 
     fn paths(pl: &Playlists, id: i64) -> Vec<String> {
         pl.items(id).unwrap().into_iter().map(|t| t.path).collect()
+    }
+
+    /// Opt-in: migrate the real foobar2000-v2 profile (read-only).
+    ///
+    /// Ignored by default because the profile may be absent or locked in CI. Run
+    /// with `cargo test -p lyra-library -- --ignored --nocapture`; set
+    /// `LYRA_FB2K_PROFILE` to override the default `%APPDATA%\foobar2000-v2` path.
+    /// Prints each playlist's title, imported/skipped counts and first items so QA
+    /// can compare them with Beefweb.
+    #[test]
+    #[ignore = "reads the real foobar2000 profile; opt-in"]
+    fn migrate_real_profile_opt_in() {
+        let profile = std::env::var_os("LYRA_FB2K_PROFILE")
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("APPDATA").map(|a| Path::new(&a).join("foobar2000-v2"))
+            })
+            .expect("no profile path");
+        eprintln!("migrating {}", profile.display());
+        let mut pl = mem();
+        let report = pl.migrate_foobar_playlists(&profile).expect("migrate");
+        for (title, result) in &report {
+            match result {
+                Ok(s) => {
+                    eprintln!("OK   {title:?}: {} imported, {} skipped", s.imported, s.skipped);
+                    for item in pl.items(s.playlist_id).unwrap().iter().take(3) {
+                        eprintln!("       - {}", item.path);
+                    }
+                }
+                Err(e) => eprintln!("FAIL {title:?}: {e}"),
+            }
+        }
     }
 }
