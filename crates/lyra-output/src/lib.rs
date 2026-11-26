@@ -90,6 +90,15 @@ mod not_windows {
     /// Opaque handle placeholder off-Windows; [`open`] never returns one.
     pub struct OutputHandle;
 
+    impl OutputHandle {
+        /// See the Windows implementation. No-op off-Windows (no device exists);
+        /// present so engine code that calls `flush()` compiles cross-platform.
+        pub fn flush(&self) {}
+
+        /// Alias for [`OutputHandle::flush`]; no-op off-Windows.
+        pub fn reset(&self) {}
+    }
+
     /// See the Windows implementation. Returns an error off-Windows.
     pub fn open(
         _dev: &DeviceId,
