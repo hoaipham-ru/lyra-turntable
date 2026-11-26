@@ -59,3 +59,19 @@ before P3 passed. These remaining nits were parked (none affects the offline byt
 | P3-5 | `crates/lyra-output/src/handle.rs` + `crates/lyra-engine/src/worker.rs` — timeout-then-service race: if the RT render thread is starved >500 ms, `flush()` times out, the worker rebases and pushes post-seek bytes, and the RT thread's next `service_flush` then drains those fresh bytes (req still > ack), dropping the start of landed audio until `pump()` refills. Only under a >500 ms RT stall. Fix: on a timed-out flush, defer pushes until `flush_ack` is observed, or carry an outstanding-flush generation. | lyra-output / lyra-engine |
 | P3-6 | `crates/lyra-output/src/wasapi_backend.rs` — `service_flush` is reached only after the device event wait; on repeated `wait_for_event` errors it is skipped via `continue`. Bounded in practice by the 500 ms flush timeout; add a comment that flush latency depends on event delivery. | lyra-output |
 | P3-7 | `crates/lyra-engine/src/sink.rs` — `OfflineSink::flush` is a deliberate no-op, so QA offline captures still contain the pre-seek region: a B1 regression would surface only in the `RingSink` unit test, not in offline byte-equality. Intentional/documented; flagged so QA does not rely on offline captures to catch a flush regression. | lyra-qa |
+
+## P4 (app alpha) reviewer follow-ups (non-blocking, 2026-11-26)
+
+`lyra-reviewer` returned **PASS with no blocking findings** for P4. The native path does not
+touch the RT render thread or the sample path; "never two players at once", the bit-perfect
+badge and the volume lock all hold. These nits were parked:
+
+| # | Item | Owner |
+|---|---|---|
+| P4-1 | `src-tauri/src/engine.rs:226` — the `to_payload` badge string-builder has no direct Rust unit test; the string-assembly branches (codec present/absent, 44.1 vs 96 kHz trim, DSD label, ✓/✗) are covered only indirectly (TS render test + `p4.ps1` `Format:` line). Add a Rust `#[test]` table over `(EngineEvent, expected badge)`. | lyra-app |
+| P4-2 | `crates/lyra-library/src/playlists.rs:379` — `import_m3u` is non-atomic: `create()` then `add_items()` run in separate transactions, so a DB error during `add_items` leaves an orphan empty playlist. Wrap both in one transaction. | lyra-library |
+| P4-3 | `src-tauri/src/{engine,library,lib}.rs` — pervasive `Mutex::lock().unwrap()` propagates poison: a panic in one command poisons the state mutex so every later command panics. Not file/device input, so non-blocking; consider `unwrap_or_else(|e| e.into_inner())` or a documented policy. | lyra-app |
+| P4-4 | `src-tauri/src/engine.rs:41` — `Shared::track_ext: Mutex<Option<String>>` is only ever touched on the single event-forwarding thread; the `Mutex` is unnecessary (harmless). | lyra-app |
+| P4-5 | `src-tauri/src/engine.rs:370` — a `Seek` issued before any `Track`/`Format` event uses `source_rate == 0`, silently seeking to frame 0. Clamp or ignore until a rate is known. | lyra-app |
+| P4-6 | `src/backend/NativeBackend.ts` — after `engine_shutdown` on a backend switch the hook keeps `connected === true` (stale); cosmetic, no sound/function impact. | lyra-app |
+| P4-7 | (carried from P3) truncated/corrupt mid-stream data still ends without an `EngineEvent::Error`. P4 forwards `Error` faithfully but the engine never emits one for mid-stream truncation. **Not worsened by P4** — remains the explicitly-deferred "fix in P4 or later" item. | lyra-engine |
