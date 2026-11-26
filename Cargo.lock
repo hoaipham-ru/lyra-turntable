@@ -2472,6 +2472,7 @@ dependencies = [
  "lyra-core",
  "lyra-decode",
  "lyra-dsd",
+ "lyra-library",
  "lyra-output",
 ]
 
@@ -2500,7 +2501,9 @@ name = "lyra-play"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "crossbeam-channel",
  "lyra-core",
+ "lyra-engine",
  "lyra-output",
 ]
 
