@@ -203,7 +203,7 @@ $cueLines = @('REM Lyra synthetic gapless test (sweep+pink, 24/96)',
     'TITLE "Lyra Gapless Test"', 'PERFORMER "Lyra"',
     'FILE "gapless_whole.flac" WAVE')
 for ($i = 0; $i -lt 5; $i++) {
-    $mm = [int](($i * 12) / 60); $ss = ($i * 12) % 60
+    $mm = [int][math]::Floor(($i * 12) / 60); $ss = ($i * 12) % 60
     $cueLines += ('  TRACK {0:D2} AUDIO' -f ($i + 1))
     $cueLines += ('    TITLE "Part {0}"' -f ($i + 1))
     $cueLines += ('    INDEX 01 {0:D2}:{1:D2}:00' -f $mm, $ss)

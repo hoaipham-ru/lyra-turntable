@@ -49,6 +49,15 @@ if ($Phase -eq 'P1') {
     return & $p1 @fwd
 }
 
+# P3 has a dedicated playback-engine gate (p3.ps1): gapless, cue boundaries,
+# seek-through-engine, command storm, clock drift, robustness and fuzzing.
+if ($Phase -eq 'P3') {
+    $p3 = Join-Path $PSScriptRoot 'p3.ps1'
+    $fwd = @{}
+    if ($GoldenManifest) { $fwd['GoldenManifest'] = $GoldenManifest }
+    return & $p3 @fwd
+}
+
 function Get-ToolVersion([string]$name, [string]$arg) {
     $cmd = Get-Command $name -ErrorAction SilentlyContinue
     if (-not $cmd) { return "${name}: not found" }
