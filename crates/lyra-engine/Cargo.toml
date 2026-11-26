@@ -4,5 +4,13 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+description = "S05 — Lyra playback engine: transport, queue, position clock and decode/output routing."
 
 [dependencies]
+lyra-core = { path = "../lyra-core" }
+lyra-decode = { path = "../lyra-decode" }
+lyra-dsd = { path = "../lyra-dsd" }
+lyra-output = { path = "../lyra-output" }
+crossbeam-channel = "0.5"
+
+[dev-dependencies]
