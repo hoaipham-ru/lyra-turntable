@@ -25,6 +25,7 @@
 //! See `testing/TEST-STRATEGY.md` §4 (parity criteria) and §9 (report format).
 
 mod compare;
+mod dsd;
 mod engine;
 mod ffmpeg;
 mod mute;
@@ -60,6 +61,29 @@ enum Commands {
     Meta,
     /// Control the endpoint mute flag for the Sound rule (does not touch samples).
     Mute(MuteArgs),
+    /// [P5] DSD helpers: convert DFF -> DSF fixtures (writes under target/ only).
+    Dsd(DsdArgs),
+}
+
+#[derive(Parser)]
+struct DsdArgs {
+    #[command(subcommand)]
+    command: DsdCommands,
+}
+
+#[derive(Subcommand)]
+enum DsdCommands {
+    /// Re-container an uncompressed DFF as DSF (identical DSD, bit order flipped).
+    Convert(ConvertArgs),
+}
+
+#[derive(Parser)]
+struct ConvertArgs {
+    /// Input DFF (DSDIFF) file.
+    input: PathBuf,
+    /// Output DSF path. Must be under a `target/` directory (ADR-006). Omit to use
+    /// `target/corpus-synth/dsf/<input-stem>.dsf`.
+    output: Option<PathBuf>,
 }
 
 /// Decoder backend for audio inputs.
@@ -203,6 +227,7 @@ fn main() -> ExitCode {
         Commands::Capture => stub("capture", "P2"),
         Commands::Meta => stub("meta", "P0.6"),
         Commands::Mute(a) => mute::run(a.action.into(), a.device.as_deref()),
+        Commands::Dsd(a) => cmd_dsd(&a),
     };
     match r {
         Ok(code) => code,
@@ -212,6 +237,18 @@ fn main() -> ExitCode {
             // mismatch (1) so gating scripts can tell "the probe broke" apart
             // from "the streams differ". See the module exit-code contract.
             ExitCode::from(3)
+        }
+    }
+}
+
+fn cmd_dsd(args: &DsdArgs) -> Result<ExitCode> {
+    match &args.command {
+        DsdCommands::Convert(c) => {
+            let output = c
+                .output
+                .clone()
+                .unwrap_or_else(|| dsd::default_fixture_path(&c.input));
+            dsd::run_convert(&c.input, &output)
         }
     }
 }

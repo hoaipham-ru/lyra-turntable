@@ -48,14 +48,18 @@ use std::path::Path;
 
 use lyra_core::{Decoder, LyraError, Result};
 
+mod convert;
 mod decoder;
 mod dff;
 mod dop;
 mod dsf;
+mod topcm;
 mod util;
 
+pub use convert::{dff_to_dsf, write_dsf};
 pub use decoder::DsdDecoder;
 pub use dop::DopPacker;
+pub use topcm::{DsdToPcm, TargetRate};
 
 /// Which container a DSD file uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
