@@ -11,3 +11,13 @@ lyra-core = { path = "../lyra-core" }
 lyra-decode = { path = "../lyra-decode" }
 lyra-dsd = { path = "../lyra-dsd" }
 rusqlite = { version = "0.43.0", features = ["bundled"] }
+serde_json = "1"
+# Optional folder watcher (P6.4). Gated behind the `watch` feature so the default
+# build pulls no filesystem-notification dependency and never spawns a watcher
+# thread. notify 6.1 is licensed CC0-1.0 (a permissive public-domain dedication);
+# its Windows deps are MIT / MIT-OR-Apache-2.0. All permissive.
+notify = { version = "6.1", optional = true }
+
+[features]
+# Off by default: enables the `cache::watcher` folder watcher and its `notify` dep.
+watch = ["dep:notify"]
