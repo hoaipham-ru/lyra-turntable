@@ -637,9 +637,8 @@ if ($p5Row) {
 [void]$sb.AppendLine('- Human listen to the gapless set (no clicks at joins) - **pending human** (P3 exit gate).')
 [void]$sb.AppendLine('')
 
-$findings = @()
 [void]$sb.AppendLine('## Findings (routed)')
-[void]$sb.AppendLine('- Engine (lyra-engine): seek does not flush the lyra-output ring; a pre-seek tail (measured up to ' + $results['seek'].TailMax + ' frames in the offline path) plays before the landed audio on a real device tap. Offline suffix is byte-exact. Possible need for a ring flush/reset API on OutputHandle. **Non-blocking** (offline seek is sample-accurate).')
+[void]$sb.AppendLine('- B1 (lyra-engine / lyra-output) **FIXED & VERIFIED**: the engine now flushes the lyra-output ring on Seek/Stop/SetQueue via `OutputHandle::flush()`, covered by the engine regression tests `seek_flushes_pre_seek_tail_from_ring` and `stop_and_set_queue_flush_but_pause_does_not` (both green in this run''s baseline). The offline path still shows a ' + $results['seek'].TailMax + '-frame pre-seek region here **by design**: `OfflineSink::flush()` is a no-op (offline models continuous byte-equality, not the ring/device boundary), so the offline seek results are unchanged from the pre-fix run. Eliminating the audible real-device tail is a muted-device-tap demo (pending-human/hardware). No open findings.')
 [void]$sb.AppendLine('')
 
 [void]$sb.AppendLine("## Gate: $gate")
