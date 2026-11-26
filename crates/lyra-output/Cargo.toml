@@ -6,6 +6,13 @@ license.workspace = true
 repository.workspace = true
 description = "Lyra output service: bit-perfect WASAPI exclusive/shared render + device tap (S04)."
 
+[features]
+# Build the real ASIO backend (src/asio_backend.rs) via `asio-sys`. Requires the
+# Steinberg ASIO SDK at build time, located with the `CPAL_ASIO_DIR` env var
+# (ADR-002). OFF by default so the SDK-less workspace build/test stays green
+# (ADR-009). Enable with: cargo build -p lyra-output --features asio
+asio = ["dep:asio-sys"]
+
 [dependencies]
 lyra-core = { path = "../lyra-core" }
 rtrb = "0.3"
@@ -19,3 +26,6 @@ windows = { version = "0.57", features = [
     "Win32_System_Com",
     "Win32_System_Threading",
 ] }
+# Optional: only pulled in (and only then needs the ASIO SDK) when the `asio`
+# feature is enabled. Never built by the default workspace build.
+asio-sys = { version = "0.2", optional = true }
