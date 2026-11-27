@@ -40,9 +40,9 @@ is the default and only normal backend.
 
 - Tauri v2 (Rust + WebView2), React 18, TypeScript, Vite
 - Transparent, frameless window
-- Current release: **1.0.0** — FLAC, WAV and DSD (DSF/DFF), bit-perfect, no foobar2000 needed
+- Current version: **1.0.0 (release candidate)** — FLAC, WAV and DSD (DSF/DFF), bit-perfect, no foobar2000 needed. Certification is not finished yet: see [Status](#status-as-of-2026-11-27)
 
-> The UI labels are in Vietnamese. This README quotes each label with its English meaning, e.g. **Tệp** (File). The strings live in one table (`src/strings.ts`) so an English/Vietnamese toggle can be added later.
+> The UI is in English (song titles are shown as tagged). All strings live in one table (`src/strings.ts`), so a language toggle can be added later.
 
 ---
 
@@ -95,7 +95,7 @@ with a `✗` means the device forced a conversion (e.g. `→ shared 48k ✗`).
 > Lyra hands the output API match the file. What the DAC does after that is up to the DAC.
 
 ### 3.1 Choose an exclusive output (Lyra ⚙ Settings)
-Open **Cài đặt** (Settings, the ⚙ button):
+Open **Settings** (the ⚙ button):
 - **Output device**: pick your DAC. The list shows each device's highest exclusive-mode rate.
 - **Output mode**:
   - **Exclusive** (WASAPI exclusive): built into Windows, works with any DAC, bit-perfect.
@@ -103,11 +103,13 @@ Open **Cài đặt** (Settings, the ⚙ button):
   - **Shared**: goes through the Windows mixer (not bit-perfect) — only for troubleshooting.
 - **DSD routing**: **Auto** picks native DSD / DoP / PCM from what the device supports (see 3.4).
 
-### 3.2 Volume stays at 0 dB
-In bit-perfect mode the **volume knob is locked at 0 dB** — turning it down would throw
-away bits. The knob shows a tooltip explaining this. Set the listening level on your DAC
-or amplifier instead. (Lyra does no DSP, resampling or ReplayGain of its own, so there is
-nothing else to switch off inside the app.)
+### 3.2 Volume
+The volume knob controls the **device (endpoint) volume** through Windows. Windows applies
+it *after* Lyra hands over the samples, so the stream itself stays bit-perfect. On a DAC
+with hardware volume this is the DAC's own volume; a device without hardware volume may
+ignore it in exclusive mode — then set the level on the DAC or amplifier. For the purest
+path, leave the knob at maximum and set the level on the DAC/amp. (Lyra does no DSP,
+resampling or ReplayGain of its own, so there is nothing else to switch off in the app.)
 
 ### 3.3 Windows
 *Control Panel › Sound › <your DAC> › Properties*:
@@ -139,7 +141,7 @@ on. On a DAC with no DSD support, Lyra converts to PCM and the badge says so.
 ### 3.5 Quick checklist
 - [ ] Output mode = Exclusive or ASIO (not Shared)
 - [ ] Output device = your DAC
-- [ ] Volume at 0 dB (it is locked there), level set on the DAC
+- [ ] Knob at maximum, listening level set on the DAC/amp (recommended)
 - [ ] Windows: exclusive mode allowed, enhancements and spatial sound off
 - [ ] Badge is green `✓` while playing
 
@@ -149,26 +151,27 @@ on. On a DAC with no DSD support, Lyra converts to PCM and the badge says so.
 
 | Task | How |
 |---|---|
-| Open a music file | Right-click the file › **Open with › Lyra Turntable**, or **Tệp › Mở file…** (File › Open, Ctrl+O). The file plays in *Default Playlist* |
-| Add to the playlist on screen | **Tệp › Thêm file… / Thêm thư mục… / Thêm địa chỉ…** (Add files / Add folder / Add location, Ctrl+U), or drag & drop onto the window |
-| Playlists | **Playlist mới** (New playlist, Ctrl+N), **Mở playlist…** (Load), **Lưu playlist…** (Save, Ctrl+S). Switch playlists with the picker above the list. × removes a track, **Xóa hết** (Clear all) empties the list |
+| Open a music file | Right-click the file › **Open with › Lyra Turntable**, or **File › Open file…** (Ctrl+O). The file plays in *Default Playlist* |
+| Add to the playlist on screen | **File › Add files… / Add folder… / Add location…** (Ctrl+U), or drag & drop onto the window |
+| Playlists | **New playlist** (Ctrl+N), **Open playlist…**, **Save playlist…** (Ctrl+S). Switch playlists with the picker above the list. **Clear** empties the list |
+| Tracks in the list | Click selects (Ctrl / Shift for several, Ctrl+A all), **double-click or Enter plays**, **Delete** or × removes, **drag a track to reorder** (Lyra backend) |
 | Seek (needle drop) | Click a groove on the record |
-| Transport | The PREV / PLAY / NEXT keys and the volume knob (locked at 0 dB while bit-perfect — read section 3.2) |
+| Transport | The PREV / PLAY / NEXT keys; Space = play/pause, ←/→ = previous/next. Volume knob: drag up/down, mouse wheel or arrow keys (section 3.2) |
 | Show/hide the playlist | Click the ‹ / › tab between the turntable and the list |
 | Move the window | Press and hold the **left mouse button** on any empty area and drag |
 | Pin on top / minimize / close | The three buttons at the top right |
-| Settings | The ⚙ **Cài đặt** (Settings) button: backend, output device, output mode, DSD routing |
-| System tray | Play/Pause, Next, Prev, **Hiện Lyra** (Show Lyra), Quit |
+| Settings | The ⚙ **Settings** button: backend, output device, output mode, DSD routing. Device/mode/DSD changes take effect when playback (re)starts |
+| System tray | Play / Pause, Next, Previous, **Show Lyra**, Exit |
 
 ### Settings: backend
 The default — and only normal — backend is **Lyra (bit-perfect)**, the native engine.
-foobar2000 lives under **Nâng cao / cũ** (Advanced / Legacy) and is there only if you
+foobar2000 lives under **Advanced / Legacy** and is there only if you
 specifically need the old path; it requires foobar2000 to be installed. Switching
 backends never lets two players make sound at once — Lyra stops the one you leave first.
 
 ### Default Playlist
 - On startup, *Default Playlist* is emptied, **unless** you added tracks to it yourself or it is currently playing.
-- Files opened via *Open with* or **Tệp › Mở file…** always go to *Default Playlist* and start playing.
+- Files opened via *Open with* or **File › Open file…** always go to *Default Playlist* and start playing.
 
 ### Legacy foobar2000 backend (optional)
 If you switch to the legacy backend:
@@ -195,7 +198,7 @@ then, those formats only play through the legacy foobar2000 backend.
 |---|---|
 | Badge is amber `✗` / "shared" | You are in Shared output mode, or the device rejected the file's rate in exclusive mode. Set mode = Exclusive or ASIO, and confirm the device accepts the rate (section 3.1) |
 | DAC doesn't change sample rate | You are in Shared mode. Switch to Exclusive or ASIO. On a laptop, also check which rates the built-in output accepts (section 7.2) |
-| Clicks or dropouts in exclusive mode | Use ASIO if your DAC has a driver; some devices are happier there |
+| Clicks or dropouts in exclusive mode | Make sure you run 1.0.0 or later (the DSD→PCM start-up underrun was fixed there). Otherwise try ASIO if your DAC has a driver |
 | DSD plays as PCM | Your DAC has no DSD support, so Lyra uses DSD→PCM. For native DSD/DoP you need a DSD-capable DAC (section 7) |
 | Sound is "wider", louder or coloured | Windows *Audio enhancements* or *Spatial sound* (e.g. Dolby Atmos) is on. Turn both **Off** for the output device |
 | Lyra is missing from *Open with* | Launch Lyra once (it registers on first run). Lyra never makes itself the default app |
@@ -219,13 +222,30 @@ it matches, file by file — which it now does for FLAC and WAV against libFLAC.
 - **DSD → PCM:** works on the development laptop (built-in Senary codec, no DSD DAC), so DSD files are playable everywhere.
 - **Native DSD over ASIO** and **DoP over WASAPI** are implemented and unit-tested, but their end-to-end hardware verification is **pending a DSD-capable DAC** — the dev laptop cannot output raw DSD. See the release notes for the full pending list.
 
+### Status as of 2026-11-27
+
+**Done**
+- FLAC + WAV decode bit-identical to libFLAC across the 82-file corpus; bit-perfect to the WASAPI API boundary.
+- DSD (DSF/DFF) playback via DSD→PCM; DSD→PCM underruns fixed (perf check: FLAC 24/192 **0**, DSD64 **0** underruns; CPU 0.2 % / 1.4 %, ~14 MB RAM).
+- Native backend is the default; one-time read-only import of foobar2000 playlists.
+- UI 0.4.1 fixes (English UI, working dropdowns, device volume knob, playlist select/reorder) pass component and browser tests (UI gate P8.3b).
+- No memory growth over 30 minutes of playback (0.04 MB/min).
+
+**Still pending before 1.0 is certified**
+- 30-minute soak on the real device (the last attempt fell back to offline and is not counted).
+- UI tests in the real WebView2 window (needs tauri-driver + msedgedriver), final QA gate, uninstall test, final review.
+- Hardware checks that need equipment: loopback A/B vs foobar2000, CPU comparison vs foobar2000, ASIO on the Sony NW-A55 (Sony driver), native DSD / DoP on a DSD-capable DAC.
+
+The full list of known weaknesses lives in [`docs/BACKLOG-polish.md`](docs/BACKLOG-polish.md#known-weaknesses-as-of-041-2026-11-26).
+
 ### 7.2 Hardware notes
 Bit-perfect only works at rates the output device accepts. On the development laptop
-(built-in Senary codec): **Speakers accept only 48 kHz; Headphones accept 48 and
-96 kHz** (no 44.1). There, 48/96 kHz files play bit-perfect and the badge shows it;
-other rates fall back to shared mode and the badge turns amber. 44.1/192 kHz bit-perfect
-and native DSD need an external USB DAC (ASIO for native DSD). Check your device in
-*Settings › System › Sound › (device) › Properties › Format*.
+(built-in Senary codec) the Windows *Format* list shows only 48 kHz (speakers) and 48/96 kHz
+(headphones) — that list is for **shared** mode only. In **exclusive** mode both outputs
+accept **44.1–192 kHz, 16/24/32-bit**, so FLAC up to 24/192 plays bit-perfect there. It has
+no DSD support, so DSD plays as DSD→PCM 176.4 kHz. Also verified on a **Sony NW-A55 in
+USB-DAC mode** (Windows class driver): FLAC 16/44.1, 24/96 and 24/192 bit-perfect, 0 underruns.
+Native DSD needs an external DAC with DSD support (ASIO for native DSD).
 
 ### 7.3 How it is built
 The engine is built by Claude Code subagents (`.claude/agents/lyra-*`), one per service,
