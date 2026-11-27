@@ -5,7 +5,7 @@
 <h1 align="center"><i>Lyra</i> Turntable</h1>
 
 <p align="center">
-  <b>A classic record player for foobar2000.</b> Drop the needle and listen, bit-perfect all the way to your DAC.<br>
+  <b>A classic record player with its own bit-perfect audio engine.</b> Drop the needle and listen — Lyra decodes and plays your files all the way to the DAC, untouched. No foobar2000 required.<br>
   <sub>Tauri v2 · Rust · React · Windows 10/11</sub>
 </p>
 
@@ -18,25 +18,31 @@
 | <img src="docs/images/compact.png" alt="Playlist hidden, only the turntable" width="380"> | <img src="docs/images/menu.png" alt="File menu" width="520"> |
 
 **Highlights**
+- 🎛️ **Standalone engine**: Lyra's own Rust decoders feed a WASAPI-exclusive / ASIO output. Install Lyra alone — nothing else — and playback is bit-perfect.
 - 🎚️ **Needle drop**: click any groove to seek, and the tonearm follows the track position
 - 💿 Album art is printed on the record label; the record spins at 33⅓ while playing and stops on pause
-- 📂 *Open with* for FLAC, WAV, ALAC, DSF/DFF…, drag & drop, playlists, and a **File** menu modeled on foobar2000
+- 🟢 A **bit-perfect badge** on the turntable shows the exact path, e.g. `FLAC 24/96 → 24/96 ✓`. The volume knob locks at 0 dB while bit-perfect, with a tooltip saying why
+- 📂 *Open with* for FLAC, WAV and DSD (`.dsf`/`.dff`), drag & drop, playlists, and a **File** menu modeled on foobar2000
 - 🪶 Frameless window you drag with the left mouse button, plus a ‹ › playlist drawer that slides away
-- 🔇 foobar2000 runs fully hidden behind it, and quits with Lyra (only if Lyra started it)
 
 ---
 
 ## How it works
 
-**Released app (0.3.0):** Lyra is the front end; decoding and audio output are done by foobar2000. Lyra controls foobar2000 through **Beefweb** (a REST API on `localhost:8880`) and through foobar2000's command line. Sections 1–5 describe this version.
+**Lyra 1.0 is a standalone player.** Its own Rust audio engine (the *Lyra Engine*)
+decodes the file and sends the samples to the DAC through **WASAPI exclusive** or
+**ASIO**, without resampling, mixing or digital volume along the way. foobar2000 is
+**not installed, launched or required**.
 
-**In development: Lyra Engine.** A native Rust audio engine is replacing foobar2000, so that installing Lyra alone gives bit-perfect playback (see [section 7](#7-lyra-engine-in-development)). Until it is finished, the app keeps using foobar2000 through the `FoobarBackend`.
+foobar2000 still exists as a **hidden "Advanced / Legacy" backend** for anyone who
+specifically wants the old path, but a fresh user never touches it: the native engine
+is the default and only normal backend.
 
 - Tauri v2 (Rust + WebView2), React 18, TypeScript, Vite
 - Transparent, frameless window
-- Current release: **0.3.0** · engine target: **1.0** (FLAC + DSD, no foobar2000 needed)
+- Current release: **1.0.0** — FLAC, WAV and DSD (DSF/DFF), bit-perfect, no foobar2000 needed
 
-> The UI labels are in Vietnamese. This README quotes each label with its English meaning, e.g. **Tệp** (File).
+> The UI labels are in Vietnamese. This README quotes each label with its English meaning, e.g. **Tệp** (File). The strings live in one table (`src/strings.ts`) so an English/Vietnamese toggle can be added later.
 
 ---
 
@@ -44,25 +50,24 @@
 
 | Component | Notes |
 |---|---|
-| Windows 10/11 x64 | WebView2 is preinstalled |
-| foobar2000 v2 x64 | Standard install at `C:\Program Files\foobar2000\foobar2000.exe` (the path is hard-coded in `src-tauri/src/lib.rs`) |
-| `foo_beefweb` (0.10+) | **Required**: Lyra talks to foobar2000 through it |
-| `foo_out_asio` | Optional: output through your DAC's ASIO driver |
-| `foo_input_sacd` | Optional: DSD playback (`.dsf`, `.dff`, SACD `.iso`) |
-| `foo_dsd_processor` | Optional: DSD processing/conversion |
+| Windows 10/11 x64 | WebView2 is preinstalled. No other software needed for playback |
+| A DAC (optional but recommended) | Any WASAPI device works; a USB DAC with an **ASIO** driver is the most stable path and the only way to play **native DSD** |
 
-### Beefweb settings
-foobar2000 → *File › Preferences › Tools › Beefweb Remote Control*:
-- **Port**: `8880`
-- **Allow remote connections**: off (Lyra only needs `localhost`)
-- **Require authentication**: off
+**foobar2000 is not required.** It is only consulted if you deliberately switch to the
+hidden legacy backend (see [Settings](#4-using-lyra)); even then Lyra starts it hidden
+and closes it only if Lyra started it.
 
 ---
 
 ## 2. Installation
 
 **Option 1: installer**
-Run `Lyra Turntable_0.3.0_x64-setup.exe`. It installs for the current user only, to `%LOCALAPPDATA%\Lyra Turntable\lyra.exe`, with no admin rights needed.
+Run `Lyra Turntable_1.0.0_x64-setup.exe`. It installs for the current user only, to
+`%LOCALAPPDATA%\Lyra Turntable\lyra.exe`, with no admin rights needed.
+
+On first launch Lyra does a **one-time, read-only import** of any foobar2000 v2
+playlists it finds (`%APPDATA%\foobar2000-v2\playlists-v2.0\`) so returning users keep
+their lists. Your foobar2000 files are never modified.
 
 **Option 2: build from source**
 ```powershell
@@ -77,53 +82,66 @@ To change the icon, edit `app-icon.svg` and run `npx tauri icon app-icon.svg`.
 
 ## 3. Playing high-resolution files without losing quality (bit-perfect)
 
-The goal is to deliver **exactly the bits in the file** to the DAC, with no resampling, mixing or digital volume from Windows or any software along the way. Lyra never touches the audio data, so every setting below lives in **foobar2000** and **Windows**.
+The goal is to deliver **exactly the bits in the file** to the DAC, with no resampling,
+mixing or digital volume from Windows or any software along the way. Lyra's engine never
+touches the audio data; the only things that can degrade it live in **Lyra's Settings**
+and in **Windows**.
 
-> Menu names may differ slightly between foobar2000 and component versions.
+Lyra shows a **bit-perfect badge** on the turntable while it plays: green with a `✓`
+means the samples reached the output API unchanged (e.g. `FLAC 24/96 → 24/96 ✓`), amber
+with a `✗` means the device forced a conversion (e.g. `→ shared 48k ✗`).
 
-### 3.1 Use an exclusive output
-foobar2000 → *Preferences › Playback › Output*:
-- **Device**: pick one of
-  - `WASAPI (exclusive) : <your DAC>`: built into Windows, works with any DAC.
-  - `ASIO : <your DAC's driver>`: needs `foo_out_asio` and the manufacturer's ASIO driver. Usually more stable, and the only way to play **native DSD**.
-- **Output format**: the highest bit depth your DAC supports (24-bit or 32-bit).
-- **Buffer length**: around 1000 ms. Raise it if you hear clicks or dropouts.
+> Bit-perfect is proven to the **WASAPI / ASIO API boundary** on this hardware — the bits
+> Lyra hands the output API match the file. What the DAC does after that is up to the DAC.
 
-**Avoid** `Primary Sound Driver` and `DirectSound`. Both go through the Windows mixer, which resamples everything to the system's default sample rate.
+### 3.1 Choose an exclusive output (Lyra ⚙ Settings)
+Open **Cài đặt** (Settings, the ⚙ button):
+- **Output device**: pick your DAC. The list shows each device's highest exclusive-mode rate.
+- **Output mode**:
+  - **Exclusive** (WASAPI exclusive): built into Windows, works with any DAC, bit-perfect.
+  - **ASIO**: needs the manufacturer's ASIO driver. Usually more stable, and the only way to play **native DSD**.
+  - **Shared**: goes through the Windows mixer (not bit-perfect) — only for troubleshooting.
+- **DSD routing**: **Auto** picks native DSD / DoP / PCM from what the device supports (see 3.4).
 
-### 3.2 Let nothing process the signal
-- *Preferences › Playback › DSP Manager*: **leave Active DSPs empty** (no resampler, equalizer or crossfeed).
-- *Preferences › Playback › ReplayGain*: **Source mode = none**.
-- **Keep foobar2000's volume at 0 dB (maximum).** Lyra's volume knob *is* foobar2000's digital volume: turning it down throws away bits, and playback is no longer bit-perfect. Set the listening level on your DAC or amplifier instead.
+### 3.2 Volume stays at 0 dB
+In bit-perfect mode the **volume knob is locked at 0 dB** — turning it down would throw
+away bits. The knob shows a tooltip explaining this. Set the listening level on your DAC
+or amplifier instead. (Lyra does no DSP, resampling or ReplayGain of its own, so there is
+nothing else to switch off inside the app.)
 
 ### 3.3 Windows
 *Control Panel › Sound › <your DAC> › Properties*:
 - *Advanced*: enable **Allow applications to take exclusive control of this device**.
 - *Enhancements* / *Audio enhancements*: **turn all off**.
-- *Spatial sound*: **Off**.
+- *Spatial sound* (e.g. Dolby Atmos): **Off**.
 
-### 3.4 Hi-res PCM (FLAC 24/96, 24/192, WAV, ALAC, AIFF, WavPack, APE)
-Nothing else to do. With WASAPI exclusive or ASIO, the DAC switches to each track's native sample rate. Its display or indicator light should change accordingly, e.g. 44.1 → 96 → 192 kHz.
+Windows audio enhancements and spatial sound colour or re-mix the signal; keep them off
+for faithful playback.
 
-### 3.5 DSD (`.dsf`, `.dff`, SACD `.iso`)
-Requires `foo_input_sacd`. Under *Preferences › Tools › SACD* (or *DSD*), **Output Mode** offers three options:
+### 3.4 Hi-res PCM and DSD
 
-| Mode | When to use | Output |
+**PCM (FLAC, WAV — 44.1 up to 192 kHz, 16/24-bit):** nothing else to do. With WASAPI
+exclusive or ASIO the DAC switches to each track's native sample rate; its display or
+indicator light should change accordingly, e.g. 44.1 → 96 → 192 kHz.
+
+**DSD (`.dsf`, `.dff` — uncompressed DSD):** Lyra picks the route automatically from the
+device:
+
+| Route | When it is used | Output |
 |---|---|---|
-| **PCM** | DAC has no DSD support | Any. DSD is converted to PCM and is no longer native DSD |
-| **DSD (DoP)** | DAC supports DoP (most modern USB DACs) | WASAPI exclusive 24-bit, or ASIO |
-| **Native DSD** | DAC has an ASIO driver with DSD support | ASIO |
+| **Native DSD** | DAC has an ASIO driver with DSD support | ASIO, raw DSD |
+| **DSD (DoP)** | DAC supports DoP over WASAPI exclusive | WASAPI exclusive, 24-bit |
+| **DSD → PCM** | DAC has no DSD support | DSD converted to high-rate PCM |
 
-Check: while a DSD file plays, the DAC should show **DSD64**, **DSD128** and so on, not 176.4 kHz PCM. If it shows PCM in DoP mode, the usual cause is a volume below 0 dB or a DSP altering the DoP data.
+Check: while a DSD file plays, a DSD-capable DAC should show **DSD64**, **DSD128** and so
+on. On a DAC with no DSD support, Lyra converts to PCM and the badge says so.
 
-SACD `.iso` is not in the *Open with* menu. Use **Tệp › Thêm file…** (File › Add files) or drag the file onto Lyra.
-
-### 3.6 Quick checklist
-- [ ] Output = WASAPI (exclusive) or ASIO
-- [ ] DSP Manager empty, ReplayGain = none
-- [ ] foobar2000 / Lyra volume at 0 dB, level set on the DAC
-- [ ] Windows: exclusive mode allowed, enhancements off
-- [ ] DSD: DoP or native selected, DAC shows DSD
+### 3.5 Quick checklist
+- [ ] Output mode = Exclusive or ASIO (not Shared)
+- [ ] Output device = your DAC
+- [ ] Volume at 0 dB (it is locked there), level set on the DAC
+- [ ] Windows: exclusive mode allowed, enhancements and spatial sound off
+- [ ] Badge is green `✓` while playing
 
 ---
 
@@ -135,120 +153,85 @@ SACD `.iso` is not in the *Open with* menu. Use **Tệp › Thêm file…** (Fil
 | Add to the playlist on screen | **Tệp › Thêm file… / Thêm thư mục… / Thêm địa chỉ…** (Add files / Add folder / Add location, Ctrl+U), or drag & drop onto the window |
 | Playlists | **Playlist mới** (New playlist, Ctrl+N), **Mở playlist…** (Load), **Lưu playlist…** (Save, Ctrl+S). Switch playlists with the picker above the list. × removes a track, **Xóa hết** (Clear all) empties the list |
 | Seek (needle drop) | Click a groove on the record |
-| Transport | The PREV / PLAY / NEXT keys and the volume knob (read section 3.2 first) |
+| Transport | The PREV / PLAY / NEXT keys and the volume knob (locked at 0 dB while bit-perfect — read section 3.2) |
 | Show/hide the playlist | Click the ‹ / › tab between the turntable and the list |
 | Move the window | Press and hold the **left mouse button** on any empty area and drag |
 | Pin on top / minimize / close | The three buttons at the top right |
-| System tray | Play/Pause, Next, Prev, **Hiện Lyra** (Show Lyra), show/hide foobar2000, Quit |
-| foobar2000 settings | **Tệp › Cài đặt foobar2000** (File › foobar2000 Preferences, Ctrl+P) |
+| Settings | The ⚙ **Cài đặt** (Settings) button: backend, output device, output mode, DSD routing |
+| System tray | Play/Pause, Next, Prev, **Hiện Lyra** (Show Lyra), Quit |
 
-### How Lyra handles foobar2000
-- If foobar2000 is **not running**, Lyra starts it and **fully hides** its window. Closing Lyra also closes foobar2000.
-- If foobar2000 is **already running** (you opened it yourself), Lyra shares it and does **not** close it on exit.
+### Settings: backend
+The default — and only normal — backend is **Lyra (bit-perfect)**, the native engine.
+foobar2000 lives under **Nâng cao / cũ** (Advanced / Legacy) and is there only if you
+specifically need the old path; it requires foobar2000 to be installed. Switching
+backends never lets two players make sound at once — Lyra stops the one you leave first.
 
 ### Default Playlist
 - On startup, *Default Playlist* is emptied, **unless** you added tracks to it yourself or it is currently playing.
 - Files opened via *Open with* or **Tệp › Mở file…** always go to *Default Playlist* and start playing.
 
+### Legacy foobar2000 backend (optional)
+If you switch to the legacy backend:
+- If foobar2000 is **not running**, Lyra starts it and **fully hides** its window. Closing Lyra also closes foobar2000.
+- If foobar2000 is **already running** (you opened it yourself), Lyra shares it and does **not** close it on exit.
+- Bit-perfect then depends on foobar2000's own Output / DSP / ReplayGain settings, as in older Lyra releases.
+
 ---
 
-## 5. Troubleshooting
+## 5. Supported formats
+
+**1.0 (shipping):** FLAC, WAV, and DSD — `.dsf` and `.dff` (uncompressed DSD). All
+bit-perfect, decoded by Lyra itself.
+
+**After 1.0:** ALAC, AIFF, MP3, AAC, Vorbis, Opus, WavPack and APE, plus the ability to
+load foobar2000 components as an optional bridge, are planned but **not in 1.0**. Until
+then, those formats only play through the legacy foobar2000 backend.
+
+---
+
+## 6. Troubleshooting
 
 | Symptom | Check |
 |---|---|
-| Lyra can't connect | Is foobar2000 running? Is Beefweb enabled on port 8880? Try opening `http://localhost:8880/api/player` |
+| Badge is amber `✗` / "shared" | You are in Shared output mode, or the device rejected the file's rate in exclusive mode. Set mode = Exclusive or ASIO, and confirm the device accepts the rate (section 3.1) |
+| DAC doesn't change sample rate | You are in Shared mode. Switch to Exclusive or ASIO. On a laptop, also check which rates the built-in output accepts (section 7.2) |
+| Clicks or dropouts in exclusive mode | Use ASIO if your DAC has a driver; some devices are happier there |
+| DSD plays as PCM | Your DAC has no DSD support, so Lyra uses DSD→PCM. For native DSD/DoP you need a DSD-capable DAC (section 7) |
+| Sound is "wider", louder or coloured | Windows *Audio enhancements* or *Spatial sound* (e.g. Dolby Atmos) is on. Turn both **Off** for the output device |
 | Lyra is missing from *Open with* | Launch Lyra once (it registers on first run). Lyra never makes itself the default app |
 | The old icon still shows | Windows icon cache. Sign out and back in |
-| Clicks or dropouts in exclusive mode | Increase Buffer length, or use ASIO if your DAC has a driver |
-| DAC doesn't change sample rate | You are on DirectSound/Primary, or a resampler is in the DSP chain. Review section 3. On a laptop, also check which rates the built-in output accepts (section 7.3) |
-| Sound is "wider", louder or coloured | Windows *Audio enhancements* or *Spatial sound* (e.g. Dolby Atmos) is on. Turn both **Off** for the output device |
 
 ---
 
-## 6. Project layout
+## 7. The Lyra Engine
 
-```
-src/                     React UI
-  App.tsx                window shell, File menu, playlists, drawer, window drag, Open-with
-  Turntable.tsx          SVG turntable (record, tonearm, keys, volume knob)
-  backend/
-    PlayerBackend.ts     the interface the UI talks to (ADR-001)
-    FoobarBackend.ts     today's backend: Beefweb calls, polls foobar2000 every second
-  styles.css
-src-tauri/               Tauri app shell
-  src/lib.rs             foobar2000 lifecycle, window hiding (Win32), tray,
-                         single instance, Open-with registration (HKCU)
-  tauri.conf.json, capabilities/default.json
-crates/                  Lyra Engine (Rust, one crate per service)
-  lyra-core              shared types, traits, events (S01)
-  lyra-decode            FLAC/WAV decoding, sample-accurate seek (S02)        ✅ P1
-  lyra-output            WASAPI exclusive/shared output, device tap (S04)    ✅ P2 code
-  lyra-dsd               DSF/DFF, DoP, DSD→PCM (S03)                         ⏳ P5
-  lyra-engine            transport, queue, gapless, routing (S05)            ⏳ P3
-  lyra-library           tags, artwork, cue, playlists (S06)                 ⏳ P3/P4/P6
-  lyra-plugin            plugin ABI, foobar2000 bridge (S07)                 after 1.0
-tools/
-  lyra-probe             QA CLI: decode / compare / align / capture / meta / mute
-  lyra-play              headless player: --probe, --tap, exclusive/shared
-tests/parity/            QA harness vs foobar2000 (golden.ps1, run.ps1, p1.ps1, synth.ps1, fb2k_meta.ps1)
-.claude/agents/          the 10 lyra-* Claude Code subagents that build the engine
-docs/
-  images/, capture/      README screenshots and the script that re-renders them
-  BACKLOG-polish.md      small finishing touches, parked on purpose
-  PLAN-replace-foobar2000.md   first one-page plan (superseded, see section 7.4)
-```
+Lyra 1.0's audio is its own Rust engine, built as a Cargo workspace of small services.
+Quality comes from three things Lyra does itself: exact decoders (FLAC cross-checked
+bit-for-bit against libFLAC), an output path that never touches samples (WASAPI exclusive
+/ ASIO), and correct DSD handling (native DSD over ASIO, DoP over WASAPI, or DSD→PCM,
+chosen automatically from the device).
 
-`Cargo.toml` at the root is a workspace containing `src-tauri`, `crates/*` and `tools/*`.
+A bit-perfect engine can match a reference player, not beat it; the goal was to *prove*
+it matches, file by file — which it now does for FLAC and WAV against libFLAC.
 
-To refresh the screenshots after a UI change: run `npx vite --port 1420`, then `python docs/capture/capture.py` (needs `pip install playwright`; the script uses the Edge that ships with Windows, and ffmpeg to build the GIF). The album art and track list in the screenshots are sample data.
+### 7.1 What is proven, and what is pending hardware
+- **FLAC + WAV:** bit-identical to libFLAC across the test corpus; bit-perfect to the WASAPI / ASIO API boundary on this machine.
+- **DSD → PCM:** works on the development laptop (built-in Senary codec, no DSD DAC), so DSD files are playable everywhere.
+- **Native DSD over ASIO** and **DoP over WASAPI** are implemented and unit-tested, but their end-to-end hardware verification is **pending a DSD-capable DAC** — the dev laptop cannot output raw DSD. See the release notes for the full pending list.
 
----
-
-## 7. Lyra Engine (in development)
-
-### 7.1 Goal
-**1.0 = FLAC, WAV, DSF and DFF, played bit-perfect by Lyra alone, with no foobar2000
-installed.** Quality comes from three things Lyra does itself: an exact decoder
-(cross-checked against libFLAC, the decoder foobar2000 ships), an output path that
-never touches samples (WASAPI exclusive / ASIO), and correct DSD handling. Three DSD
-paths are chosen automatically from what the device supports: **native DSD over ASIO**,
-**DoP**, or **DSD→PCM**. Other formats (ALAC, MP3, AAC, Opus, APE…) and loading
-foobar2000 components come after 1.0.
-
-A bit-perfect engine can match foobar2000, not beat it; the goal is to *prove* it
-matches, file by file.
-
-### 7.2 Progress
-
-| Phase | What | Status |
-|---|---|---|
-| P0 | Workspace, contracts, test harness, golden references (82/82 corpus files) | ✅ passed |
-| P1 | FLAC + WAV decode | ✅ QA passed: **78/78 lossless files bit-identical** to libFLAC, exact lengths, broken-artwork files OK, no panics on corrupt input |
-| P2 | WASAPI exclusive output + device tap | 🔄 code merged, render tests and review pending |
-| P5 | DSD: DSF/DFF, DoP, native ASIO, DSD→PCM | ⏳ |
-| P3 | Engine: queue, gapless, seek, cue | ⏳ |
-| P4 | App alpha: native backend selectable in the UI, bit-perfect badge | ⏳ |
-| P6 | Metadata parity with foobar2000 | ⏳ |
-| P8 | Certification (parity, 2 h soak, runs without foobar2000) → **1.0** | ⏳ |
-
-### 7.3 Hardware notes
+### 7.2 Hardware notes
 Bit-perfect only works at rates the output device accepts. On the development laptop
 (built-in Senary codec): **Speakers accept only 48 kHz; Headphones accept 48 and
-96 kHz** (no 44.1). There, 48/96 kHz files play bit-perfect; other rates go through a
-high-quality resampler and the UI says so. 44.1/192 kHz bit-perfect and native DSD need
-an external USB DAC with an ASIO driver. Check your device in *Settings › System ›
-Sound › (device) › Properties › Format*, or run:
+96 kHz** (no 44.1). There, 48/96 kHz files play bit-perfect and the badge shows it;
+other rates fall back to shared mode and the badge turns amber. 44.1/192 kHz bit-perfect
+and native DSD need an external USB DAC (ASIO for native DSD). Check your device in
+*Settings › System › Sound › (device) › Properties › Format*.
 
-```powershell
-cargo build --release -p lyra-play
-target\release\lyra-play.exe --probe      # lists every device's exclusive-mode formats
-```
-
-### 7.4 How it is built
+### 7.3 How it is built
 The engine is built by Claude Code subagents (`.claude/agents/lyra-*`), one per service,
-with an independent QA agent that compares every result with foobar2000 and a reviewer
-that gates each phase. The full plan (architecture, ADRs, phase files, test strategy,
-runbook) lives outside this repo in Hoai's `learning_code/lyra-engine` folder.
+with an independent QA agent that compares every result against a reference and a
+reviewer that gates each phase. The full plan (architecture, ADRs, phase files, test
+strategy, runbook) lives outside this repo in the `learning_code/lyra-engine` folder.
 
 Useful commands:
 
@@ -257,8 +240,55 @@ cargo test --workspace                     # unit tests for all crates
 cargo clippy --workspace -- -D warnings
 target\release\lyra-probe.exe decode <file.flac>   # decode + SHA-256 + spec as JSON
 target\release\lyra-probe.exe compare <a> <b>      # bit-exact or tolerance compare
-tests\parity\run.ps1 -Phase P1             # parity suite for a phase → target\parity\reports\
+target\release\lyra-play.exe --probe               # list every device's exclusive-mode formats
 ```
 
 The test corpus is read-only; generated audio, golden decodes and reports stay under
 `target/` and are never committed.
+
+---
+
+## 8. Project layout
+
+```
+src/                     React UI
+  App.tsx                window shell, File menu, playlists, drawer, window drag, Open-with
+  Turntable.tsx          SVG turntable (record, tonearm, keys, volume knob)
+  Settings.tsx           ⚙ panel: backend, output device, output mode, DSD routing
+  Badge.tsx              bit-perfect status pill on the turntable
+  strings.ts             UI string table (Vietnamese today; English table alongside)
+  backend/
+    PlayerBackend.ts     the interface the UI talks to (ADR-001)
+    NativeBackend.ts     default backend: drives the Lyra Engine
+    FoobarBackend.ts     hidden legacy backend: Beefweb + foobar2000 command line
+  styles.css
+src-tauri/               Tauri app shell
+  src/lib.rs             native engine wiring, legacy foobar2000 lifecycle, window hiding
+                         (Win32), tray, single instance, Open-with registration (HKCU)
+  src/engine.rs, library.rs, settings.rs, volume.rs
+  tauri.conf.json, capabilities/default.json
+crates/                  Lyra Engine (Rust, one crate per service)
+  lyra-core              shared types, traits, events (S01)
+  lyra-decode            FLAC/WAV decoding, sample-accurate seek (S02)
+  lyra-output            WASAPI exclusive/shared output, device tap (S04)
+  lyra-dsd               DSF/DFF, DoP, DSD→PCM (S03)
+  lyra-engine            transport, queue, gapless, routing (S05)
+  lyra-library           tags, artwork, cue, playlists (S06)
+  lyra-plugin            plugin ABI, foobar2000 bridge (post-1.0)
+tools/
+  lyra-probe             QA CLI: decode / compare / align / capture / meta / mute
+  lyra-play              headless player: --probe, --tap, exclusive/shared
+tests/parity/            QA harness (golden.ps1, run.ps1, p1.ps1, synth.ps1, fb2k_meta.ps1)
+.claude/agents/          the lyra-* Claude Code subagents that build the engine
+docs/
+  images/, capture/      README screenshots and the script that re-renders them
+  BACKLOG-polish.md      small finishing touches, parked on purpose
+CHANGELOG.md             release notes
+```
+
+`Cargo.toml` at the root is a workspace containing `src-tauri`, `crates/*` and `tools/*`.
+
+To refresh the screenshots after a UI change: run `npx vite --port 1420`, then
+`python docs/capture/capture.py` (needs `pip install playwright`; the script uses the
+Edge that ships with Windows, and ffmpeg to build the GIF). The album art and track list
+in the screenshots are sample data.
