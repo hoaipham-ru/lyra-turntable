@@ -222,6 +222,9 @@ it matches, file by file — which it now does for FLAC and WAV against libFLAC.
 - **DSD → PCM:** works on the development laptop (built-in Senary codec, no DSD DAC), so DSD files are playable everywhere.
 - **Native DSD over ASIO** and **DoP over WASAPI** are implemented and unit-tested, but their end-to-end hardware verification is **pending a DSD-capable DAC** — the dev laptop cannot output raw DSD. See the release notes for the full pending list.
 
+### Known issues
+- **DSD→PCM start-up underrun (fix planned for 1.0.1):** on a device without DSD support (e.g. the laptop's built-in Senary codec), the first ~0.5 s of a DSD track can underrun 4–6 times as playback starts. This is start-up only — steady-state DSD→PCM is clean, and FLAC/WAV are unaffected.
+
 ### Status as of 2026-11-27
 
 **Done**
