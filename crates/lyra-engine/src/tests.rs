@@ -1188,3 +1188,101 @@ fn dsd_to_pcm_feed_never_starves_the_ring() {
 
     engine.shutdown();
 }
+
+// --- P8 startup: open primes the ring before the device's first drain --------
+
+/// A sink that never drains (`frames_played` stays 0), so a test can observe how
+/// many frames the worker has queued *ahead of the device*. It accepts every pushed
+/// byte and records the cumulative frame count — modelling the window between the
+/// device opening (the feeder has prefilled its one silence buffer and started) and
+/// its very first drain of real audio.
+struct PrimeProbeSink {
+    spec: StreamSpec,
+    bpf: usize,
+    pushed: Arc<AtomicU64>,
+}
+
+impl AudioSink for PrimeProbeSink {
+    fn negotiated(&self) -> StreamSpec {
+        self.spec
+    }
+    fn is_bit_perfect(&self) -> bool {
+        false // DSD→PCM is a processed path
+    }
+    fn push(&mut self, bytes: &[u8]) -> usize {
+        let whole = (bytes.len() / self.bpf) * self.bpf;
+        self.pushed.fetch_add((whole / self.bpf) as u64, Ordering::Relaxed);
+        whole
+    }
+    fn flush(&mut self) {}
+    fn frames_played(&self) -> u64 {
+        0 // the device has not begun draining real audio yet
+    }
+    fn underruns(&self) -> u64 {
+        0
+    }
+    fn device_lost(&self) -> bool {
+        false
+    }
+}
+
+/// P8 startup regression: opening a processed DSD→PCM track primes the ring up to the
+/// cushion **synchronously on `Load`**, before the device's first drain and without
+/// waiting for the separate `Resume`.
+///
+/// `lyra_output`'s feeder prefills only one device buffer of silence and then starts
+/// draining the ring the instant the device opens — inside `sink_factory`, before the
+/// worker can push a frame. On the DSD→PCM path the first fill is the one expensive
+/// pass (a whole-chunk FIR before any output frames exist); deferring it to a later
+/// pump tick let that silence run out under CPU contention, giving exactly one startup
+/// underrun on hardware. This drives the worker directly with `Load` **alone** (no
+/// `Resume`) against a sink that has not begun draining (`frames_played` == 0), so the
+/// only thing that can fill the ring is the synchronous prime inside `load`: the ring
+/// must already hold at least the cushion.
+///
+/// Before the fix, the first fill waited for `Resume` plus a pump tick, so with `Load`
+/// alone the ring stayed empty and this timed out; after the fix `Load` fills it at
+/// once.
+#[test]
+fn open_primes_ring_to_cushion_before_first_drain() {
+    use crate::worker::{self, WorkerCmd, WorkerEvt};
+
+    let pushed = Arc::new(AtomicU64::new(0));
+    let pushed_c = pushed.clone();
+    let sink: crate::sink::SinkFactory = Box::new(move |spec: &StreamSpec| {
+        let bpf = match spec {
+            StreamSpec::Pcm(p) => p.bytes_per_frame(),
+            StreamSpec::Dsd(_) => return Err(LyraError::Device("DSD sink unsupported".into())),
+        };
+        Ok(Box::new(PrimeProbeSink { spec: *spec, bpf, pushed: pushed_c.clone() })
+            as Box<dyn AudioSink>)
+    });
+    let source: Box<dyn Source> = Box::new(SmallChunkSource);
+
+    let (wevt_tx, _wevt_rx) = crossbeam_channel::unbounded::<WorkerEvt>();
+    let (wcmd_tx, wcmd_rx) = crossbeam_channel::unbounded::<WorkerCmd>();
+    let join = std::thread::Builder::new()
+        .name("prime-probe-worker".into())
+        .spawn(move || worker::run(wevt_tx, wcmd_rx, sink, source, TEST_PREROLL))
+        .unwrap();
+
+    // Load only — deliberately no Resume — so the sole thing that can fill the ring
+    // is the synchronous prime inside `load`, not the per-wake pump (gated on play).
+    wcmd_tx.send(WorkerCmd::Load(tref("beethoven.dff", None))).unwrap();
+
+    // Cushion = FILL_TARGET (250 ms) worth of frames at the 176.4 kHz device rate.
+    let cushion_frames = DSD_PCM_SPEC.rate as u64 * 250 / 1000;
+    let primed = wait_until(Duration::from_secs(2), || {
+        pushed.load(Ordering::Relaxed) >= cushion_frames
+    });
+    let got = pushed.load(Ordering::Relaxed);
+
+    wcmd_tx.send(WorkerCmd::Shutdown).unwrap();
+    join.join().unwrap();
+
+    assert!(
+        primed,
+        "Load must prime the ring to the cushion ({cushion_frames} frames) before the \
+         first device drain, independent of Resume; only {got} frames were queued"
+    );
+}
