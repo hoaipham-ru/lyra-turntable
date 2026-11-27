@@ -7,7 +7,10 @@
     "dev": "vite",
     "build": "vite build",
     "tauri": "tauri",
-    "test:ui": "vitest run --config tests/parity/ui/vitest.config.ts"
+    "test:ui": "vitest run --config tests/ui/component/vitest.config.ts",
+    "test:ui:smoke": "vitest run --config tests/parity/ui/vitest.config.ts",
+    "test:e2e": "playwright test --config tests/ui/e2e/playwright.config.ts",
+    "test:app": "wdio run tests/ui/smoke/wdio.conf.ts"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
@@ -17,6 +20,7 @@
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.49.1",
     "@tauri-apps/cli": "^2",
     "@testing-library/dom": "^10.4.2",
     "@testing-library/react": "^16.3.3",
