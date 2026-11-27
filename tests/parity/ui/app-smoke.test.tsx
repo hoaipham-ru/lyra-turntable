@@ -123,15 +123,15 @@ const lastCmdArg = (cmd: string) => {
 // Open Settings and switch the backend radio to native; returns once the UI shows
 // the native backend as connected.
 async function switchToNative() {
-  fireEvent.click(screen.getByRole("button", { name: "Cài đặt" }));
-  const dialog = await screen.findByRole("dialog", { name: "Cài đặt" });
+  fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+  const dialog = await screen.findByRole("dialog", { name: "Settings" });
   expect(dialog).toBeTruthy();
   const nativeRadio = screen.getByRole("radio", { name: /Lyra \(bit-perfect\)/ });
   await act(async () => {
     fireEvent.click(nativeRadio);
   });
   // close the panel
-  fireEvent.click(screen.getByRole("button", { name: "Đóng" }));
+  fireEvent.click(screen.getByRole("button", { name: "Close" }));
 }
 
 describe("P4.6 app UI smoke (native backend, mocked engine)", () => {
@@ -146,8 +146,8 @@ describe("P4.6 app UI smoke (native backend, mocked engine)", () => {
     render(<App />);
     // let the mount effects (settings_get, take_pending) flush
     await waitFor(() => expect(calledWith("settings_get").length).toBeGreaterThan(0));
-    fireEvent.click(screen.getByRole("button", { name: "Cài đặt" }));
-    const dialog = await screen.findByRole("dialog", { name: "Cài đặt" });
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    const dialog = await screen.findByRole("dialog", { name: "Settings" });
     expect(dialog).toBeTruthy();
     // the backend radios are present
     expect(screen.getByRole("radio", { name: /foobar2000/ })).toBeTruthy();
@@ -210,8 +210,8 @@ describe("P4.6 app UI smoke (native backend, mocked engine)", () => {
     // the track title shows in the header (it also appears on the vinyl label, so
     // target the header specifically)
     await waitFor(() => expect(document.querySelector("h1.title")?.textContent).toBe("Test Song"));
-    // "Đang quay" = the "playing" kicker label
-    await waitFor(() => expect(screen.getByText("Đang quay")).toBeTruthy());
+    // "Now playing" = the "playing" kicker label
+    await waitFor(() => expect(screen.getByText("Now playing")).toBeTruthy());
     // position 0:12 shown in the seek row
     await waitFor(() => expect(screen.getByText("0:12")).toBeTruthy());
   });
@@ -226,7 +226,7 @@ describe("P4.6 app UI smoke (native backend, mocked engine)", () => {
     await act(async () => {
       h.emitEngine({ kind: "state", state: "stopped" });
     });
-    fireEvent.click(screen.getByRole("button", { name: "Phát" }));
+    fireEvent.click(screen.getByRole("button", { name: "Play" }));
     await waitFor(() =>
       expect(calledWith("engine_send").some((c) => (c.args as { cmd?: { type?: string } })?.cmd?.type === "play")).toBe(true),
     );
@@ -235,14 +235,14 @@ describe("P4.6 app UI smoke (native backend, mocked engine)", () => {
     await act(async () => {
       h.emitEngine({ kind: "state", state: "playing" });
     });
-    fireEvent.click(screen.getByRole("button", { name: "Tạm dừng" }));
+    fireEvent.click(screen.getByRole("button", { name: "Pause" }));
     await waitFor(() =>
       expect(calledWith("engine_send").some((c) => (c.args as { cmd?: { type?: string } })?.cmd?.type === "pause")).toBe(true),
     );
 
     // NEXT / PREV
-    fireEvent.click(screen.getByRole("button", { name: "Bài tiếp" }));
-    fireEvent.click(screen.getByRole("button", { name: "Bài trước" }));
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    fireEvent.click(screen.getByRole("button", { name: "Previous" }));
     await waitFor(() => {
       const types = calledWith("engine_send").map((c) => (c.args as { cmd?: { type?: string } })?.cmd?.type);
       expect(types).toContain("next");
