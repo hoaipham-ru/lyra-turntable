@@ -133,6 +133,21 @@ enum Preload {
     Ready { resolved: Resolved, opened: Opened },
 }
 
+/// How a ring fill is driven.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Fill {
+    /// Steady-state per-wake top-up: cap work at one cushion of production so a wake
+    /// never runs long; the next wake continues topping the ring up.
+    Pump,
+    /// Synchronous device-open / post-flush prime: keep filling until the ring truly
+    /// holds a full cushion **ahead of the device**, so the device's first (or next,
+    /// after a flush) drain finds real audio rather than the empty ring the flush
+    /// left. A real device drains while the prime runs, so stopping after merely
+    /// *producing* a cushion can still leave the ring under-filled (P8); this mode
+    /// loops on `buffered_ahead` instead.
+    Prime,
+}
+
 /// A spec change in flight: the ring is draining before the device re-opens.
 struct Respec {
     resolved: Resolved,
@@ -324,6 +339,13 @@ impl Worker {
                     return;
                 }
             }
+        } else {
+            // An explicit (re)load onto the still-open device — Next/Prev/PlayAt, or
+            // a restart — must drop the previous track's audio still queued toward the
+            // device so the new track starts at once, not after the stale tail (B1).
+            // The `prime_ring` below then refills the emptied ring from the new track,
+            // so the device never drains into the post-flush gap (P8).
+            self.flush_sink();
         }
 
         let sink = self.sink.as_ref().expect("sink present after open");
@@ -461,6 +483,15 @@ impl Worker {
         self.clock.rebase(landed_rel, self.ring_end_dev);
         self.evt(WorkerEvt::Position(landed_rel));
         self.last_position_at = Instant::now();
+        // Re-fill the ring the flush just emptied, synchronously, before returning to
+        // the main loop — otherwise the running device drains into the empty ring in
+        // the window before the next pump tick, which under CPU contention is one (or
+        // several) underruns per seek (P8). Only while playing: a paused seek leaves
+        // the ring empty by design (the next Resume pumps it), and the small added
+        // seek latency is bounded by the cushion depth (correctness over snappy).
+        if self.playing {
+            self.prime_ring();
+        }
     }
 
     // --- Pre-roll ----------------------------------------------------------
@@ -539,7 +570,7 @@ impl Worker {
         if !self.playing {
             return;
         }
-        self.fill_to_cushion();
+        self.fill(Fill::Pump);
     }
 
     /// Synchronously pre-fill the ring up to the [`FILL_TARGET`] cushion at a device
@@ -560,12 +591,13 @@ impl Worker {
     /// control-initiated load is immediately followed by `Resume`, and the device is
     /// already draining regardless; a later `Pause` simply stops refilling and lets
     /// the primed audio drain out, exactly as pausing mid-playback does (pause never
-    /// flushes). Only the two device-open points call this — `load` and the spec-change
-    /// re-open in `finish_respec`; same-spec gapless joins keep one continuously-fed
-    /// ring and need no prime, and seek deliberately does not prime (it stays snappy,
-    /// and the running device's own buffer bridges the refill).
+    /// flushes). Device-open points call this — `load` (including the same-spec reuse
+    /// re-load that first flushes the old track's tail) and the spec-change re-open in
+    /// `finish_respec`; same-spec gapless joins keep one continuously-fed ring and need
+    /// no prime. A seek re-primes too (while playing), after its flush, so the device
+    /// does not drain into the empty ring the flush left (P8).
     fn prime_ring(&mut self) {
-        self.fill_to_cushion();
+        self.fill(Fill::Prime);
     }
 
     /// Top the ring up to the [`FILL_TARGET`] cushion ahead of the device, crossing
@@ -574,12 +606,25 @@ impl Worker {
     /// The amount produced is governed by how far the ring has fallen below the
     /// cushion, not by a fixed chunk count, so the feed rate stays matched to the
     /// device however many output frames one decode read yields (the DSD→PCM path
-    /// yields 16× fewer frames per read after decimation). Work stays bounded:
-    /// production stops once the cushion is reached, once a cushion's worth of frames
-    /// has been produced (so an instantly-draining offline sink cannot run away), or
-    /// at [`MAX_PRODUCE_ITERS_PER_TICK`].
-    fn fill_to_cushion(&mut self) {
+    /// yields 16× fewer frames per read after decimation).
+    ///
+    /// Work stays bounded by [`MAX_PRODUCE_ITERS_PER_TICK`] and by `mode`:
+    /// * [`Fill::Pump`] stops once the ring holds a cushion ahead of the device **or**
+    ///   once this wake has produced a cushion's worth of frames — so a steady-state
+    ///   wake never runs long, and an instantly-draining offline sink (which never
+    ///   accumulates `buffered_ahead`) cannot run away.
+    /// * [`Fill::Prime`] stops only once the ring *actually* holds a cushion ahead of
+    ///   the device — a real device drains while the prime runs, so a produced-count
+    ///   cap would under-fill it (P8). The offline sink never accumulates
+    ///   `buffered_ahead`; there the same produced-count cap still applies (stop once a
+    ///   cushion has been produced with nothing queued), so prime never hangs on it.
+    fn fill(&mut self, mode: Fill) {
         if self.sink.is_none() || self.respec.is_some() {
+            return;
+        }
+        // Never spin feeding a lost device: nothing drains it and the backend push is
+        // a no-op; `poll_stats` surfaces the loss instead.
+        if self.sink.as_deref().is_some_and(|s| s.device_lost()) {
             return;
         }
         if !self.flush_pending() {
@@ -597,13 +642,30 @@ impl Worker {
                 }
                 continue; // new segment installed: produce it
             }
-            // Stop once the ring holds a full cushion ahead of the device, or once
-            // this pass has produced a cushion's worth of frames. `buffered_ahead`
-            // bounds steady-state work to ~one chunk; `produced` bounds the fill on a
-            // sink that drains instantly (offline/QA), where the cushion is never
-            // "reached" because every pushed frame is consumed at once.
-            if self.buffered_ahead() >= target || produced >= target {
+            // The ring holds a full cushion ahead of the device: done (both modes).
+            if self.buffered_ahead() >= target {
                 return;
+            }
+            match mode {
+                // Steady-state wake: cap at one cushion of production so the wake
+                // returns promptly; the next wake tops the ring back up. On an
+                // instant-drain offline sink `buffered_ahead` never reaches the
+                // cushion, so this cap is what ends the pass.
+                Fill::Pump => {
+                    if produced >= target {
+                        return;
+                    }
+                }
+                // Prime: keep filling until the ring truly holds a cushion ahead of the
+                // draining device. Only an instant-drain sink (offline), where
+                // `buffered_ahead` stays at 0, falls back to the produced-count cap so
+                // the prime cannot loop forever — its missing cushion is produced by the
+                // next pump pass, and the offline capture is continuous regardless.
+                Fill::Prime => {
+                    if produced >= target && self.buffered_ahead() == 0 {
+                        return;
+                    }
+                }
             }
             // Source bytes: the carry from a crossed virtual-track boundary first,
             // then the decoder.
