@@ -132,3 +132,20 @@ Honest list of what is still weak or unverified. Owners in brackets.
 - [ ] **Stopping a run mid-wave leaves orphans** (chain-*.sh bash processes survive taskkill /T; an orphan started the soak and left the headphones muted). Orchestrator should register background chains in STATUS so a stop can kill them. [orchestrator]
 ## Known issue shipped in 1.0 (ADR-015) - fix in 1.0.1
 - [ ] **DSD->PCM start-up underrun**: on a device without DSD support (e.g. the laptop's Senary codec), the first ~0.5 s of a DSD track can underrun 4-6 times (a short tick at the very start). Steady-state playback is clean; FLAC/WAV are unaffected. Three fix rounds did not remove it. Ideas for 1.0.1: pre-convert the first DSD block before starting the stream; start the device only once the cushion is full; faster first FIR pass (table-driven DSD->PCM). [lyra-dsd, lyra-engine, lyra-output]
+
+## P8.7 reviewer nits (1.0.0)
+
+Release-hygiene review of 1.0.0. Recorded here as backlog only — no engine/audio code was
+changed closing these (versioning, licence notices, and these notes were the only edits).
+
+| # | Item | Owner |
+|---|------|-------|
+| nit 1 | `load()` does not clear `self.pending` / `pending_off` before `flush_sink()` on the Next/Prev/PlayAt reload path, unlike `seek()` / `stop()` which do. **Latent / provably-safe today**: the 250 ms re-prime cushion ≪ the 2 s output ring, so no stale pending can outlive the flush. Should clear `pending` the same way `seek()`/`stop()` do if the cushion/ring ratio ever changes (larger cushion or smaller ring could make it a real stale-audio bug). | lyra-engine |
+| nit 4 | `seek()` now does a **synchronous** flush + prime, so rapid scrubbing serializes (each seek waits for the flush+prime before the next lands). Accepted "correctness over snappy" trade-off for 1.0 (guarantees no pre-seek tail). Revisit if daily listening finds scrubbing sluggish — e.g. coalesce rapid seeks or make the flush async with an outstanding-flush generation. | lyra-engine |
+
+**Stale ADR wording (relay to lyra-architect):** ADR-007 / ADR-008 in the `lyra-engine`
+plan folder still describe an FFmpeg-based decode path. For the 1.0 standalone build this is
+stale — the shipped binary links **no FFmpeg / LGPL** (confirmed via
+`cargo tree -e no-dev -p turntable`; `ffmpeg-next` is not a dependency of any shipped crate).
+Those ADRs are lyra-architect's files and were not edited here; see `THIRD-PARTY-NOTICES.md`
+for the same observation so the orchestrator can relay it.
