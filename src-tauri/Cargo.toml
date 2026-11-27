@@ -1,7 +1,7 @@
 [package]
 name = "turntable"
-version = "0.4.1"
-description = "Classic turntable front-end for foobar2000 (via Beefweb)"
+version = "1.0.0"
+description = "Lyra Turntable — a standalone bit-perfect record player (native Lyra Engine; optional legacy foobar2000 backend)"
 edition = "2021"
 
 [lib]
