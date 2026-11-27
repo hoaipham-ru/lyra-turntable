@@ -58,6 +58,13 @@ foobar2000**. foobar2000 remains only as an optional, hidden legacy backend.
 - For faithful playback, keep Windows audio enhancements and spatial sound (e.g. Dolby
   Atmos) **off** on the output device (ADR-010).
 
+### Known issues
+- **DSD→PCM start-up underrun (ADR-015).** On a device **without DSD support** (e.g. the
+  development laptop's built-in Senary codec), starting a DSD track through the DSD→PCM
+  path produces **4–6 output underruns during roughly the first 0.5 s** of the track.
+  This affects **start-up only**: once playback is running, DSD→PCM is clean, and
+  **FLAC and WAV are not affected**. A fix is planned for **1.0.1**.
+
 ### Pending — hardware
 Built and unit-tested, but not yet verified on real hardware because the development
 laptop (built-in Senary codec) has no DSD-capable DAC:
