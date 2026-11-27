@@ -351,6 +351,9 @@ impl Worker {
         let info = resolved.info;
         self.evt(WorkerEvt::Opened { info, source, device: negotiated, bit_perfect });
         self.emit_position(true);
+        // Fill the ring to the cushion now, synchronously, before the device drains
+        // its startup silence out from under the (expensive) first DSD→PCM fill.
+        self.prime_ring();
     }
 
     /// Install `opened`/`resolved` as the current segment, rebasing the clock to
@@ -529,17 +532,53 @@ impl Worker {
 
     // --- Pumping -----------------------------------------------------------
 
+    /// Per-wake pump: while playing, top the ring up to the cushion. Gated on
+    /// `playing` so a paused track stops refilling (the already-buffered audio keeps
+    /// draining — pause never flushes, so resume is seamless).
+    fn pump(&mut self) {
+        if !self.playing {
+            return;
+        }
+        self.fill_to_cushion();
+    }
+
+    /// Synchronously pre-fill the ring up to the [`FILL_TARGET`] cushion at a device
+    /// open, **before** returning to the main loop.
+    ///
+    /// The feeder thread inside `lyra_output` prefills only one device buffer of
+    /// silence and then starts draining the ring the instant the device opens — which
+    /// happens inside `sink_factory`, before the worker can push a single frame. On
+    /// the DSD→PCM path the first fill is the one expensive pass (a whole-chunk FIR
+    /// decimation must run before any output frames exist), so deferring it to the
+    /// next main-loop `pump` tick let the device's one-buffer silence cushion run out
+    /// under CPU contention — exactly one startup underrun (P8). Priming here closes
+    /// that race: the first (incrementally pushed) frames land in the ring with no
+    /// tick-cadence gap and without waiting for the separate [`WorkerCmd::Resume`], so
+    /// the device's first post-start wake already finds real audio.
+    ///
+    /// Priming is unconditional (it does not check `playing`) because every
+    /// control-initiated load is immediately followed by `Resume`, and the device is
+    /// already draining regardless; a later `Pause` simply stops refilling and lets
+    /// the primed audio drain out, exactly as pausing mid-playback does (pause never
+    /// flushes). Only the two device-open points call this — `load` and the spec-change
+    /// re-open in `finish_respec`; same-spec gapless joins keep one continuously-fed
+    /// ring and need no prime, and seek deliberately does not prime (it stays snappy,
+    /// and the running device's own buffer bridges the refill).
+    fn prime_ring(&mut self) {
+        self.fill_to_cushion();
+    }
+
     /// Top the ring up to the [`FILL_TARGET`] cushion ahead of the device, crossing
     /// gapless joins in the same pass so no silence is inserted.
     ///
-    /// The amount produced per wake is governed by how far the ring has fallen below
-    /// the cushion, not by a fixed chunk count, so the feed rate stays matched to the
+    /// The amount produced is governed by how far the ring has fallen below the
+    /// cushion, not by a fixed chunk count, so the feed rate stays matched to the
     /// device however many output frames one decode read yields (the DSD→PCM path
-    /// yields 16× fewer frames per read after decimation). Per-wake work stays
-    /// bounded: production stops once the cushion is reached, once a tick's worth of
-    /// frames has been produced (so an instantly-draining offline sink cannot run
-    /// away), or at [`MAX_PRODUCE_ITERS_PER_TICK`].
-    fn pump(&mut self) {
+    /// yields 16× fewer frames per read after decimation). Work stays bounded:
+    /// production stops once the cushion is reached, once a cushion's worth of frames
+    /// has been produced (so an instantly-draining offline sink cannot run away), or
+    /// at [`MAX_PRODUCE_ITERS_PER_TICK`].
+    fn fill_to_cushion(&mut self) {
         if self.sink.is_none() || self.respec.is_some() {
             return;
         }
@@ -549,7 +588,7 @@ impl Worker {
         let target = self.fill_target_frames();
         let mut produced: u64 = 0;
         for _ in 0..MAX_PRODUCE_ITERS_PER_TICK {
-            if !self.playing || self.decoder.is_none() {
+            if self.decoder.is_none() {
                 return;
             }
             if self.eos {
@@ -559,7 +598,7 @@ impl Worker {
                 continue; // new segment installed: produce it
             }
             // Stop once the ring holds a full cushion ahead of the device, or once
-            // this wake has produced a tick's worth of frames. `buffered_ahead`
+            // this pass has produced a cushion's worth of frames. `buffered_ahead`
             // bounds steady-state work to ~one chunk; `produced` bounds the fill on a
             // sink that drains instantly (offline/QA), where the cushion is never
             // "reached" because every pushed frame is consumed at once.
@@ -797,6 +836,9 @@ impl Worker {
         self.install_segment(respec.opened, &respec.resolved);
         self.emit_advanced(&respec.resolved, true);
         self.emit_position(true);
+        // Re-opening for a new spec is the same startup race as a fresh load: prime
+        // the ring to the cushion before the re-opened device drains its silence.
+        self.prime_ring();
     }
 
     /// Push as much of `pending` as the ring accepts. Returns `true` when `pending`
