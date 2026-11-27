@@ -1,6 +1,6 @@
 [package]
 name = "turntable"
-version = "1.0.0"
+version = "1.0.1"
 description = "Lyra Turntable — a standalone bit-perfect record player (native Lyra Engine; optional legacy foobar2000 backend)"
 edition = "2021"
 

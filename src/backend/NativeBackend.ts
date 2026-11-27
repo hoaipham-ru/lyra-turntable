@@ -140,6 +140,8 @@ export function useNativeBackend(): PlayerBackend {
       const items = (await invoke("playlists_items", { id })) as TrackDto[];
       // Index-composite keys keep React list keys unique even with duplicate paths.
       setList(items.map((it, i) => ({ ...it, key: `${id}:${i}` })));
+      // Keep the picker's "title · N" count in step with the list just loaded.
+      setPlaylists((pls) => pls.map((p) => (p.id === id ? { ...p, itemCount: items.length } : p)));
       if (id === queueOwner.current) queuePaths.current = items.map((it) => it.key);
     } catch {
       setList([]);

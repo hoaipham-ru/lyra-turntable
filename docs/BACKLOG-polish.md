@@ -130,8 +130,8 @@ Honest list of what is still weak or unverified. Owners in brackets.
 ### Process
 - [ ] **Agent scripts can be wrong silently**: p8_perf.ps1 first crashed, then "measured" an idle process because PowerShell 5.1 split a path with spaces. QA scripts need a self-check (errors counter, non-zero frames) before numbers are trusted. [lyra-qa]
 - [ ] **Stopping a run mid-wave leaves orphans** (chain-*.sh bash processes survive taskkill /T; an orphan started the soak and left the headphones muted). Orchestrator should register background chains in STATUS so a stop can kill them. [orchestrator]
-## Known issue shipped in 1.0 (ADR-015) - fix in 1.0.1
-- [ ] **DSD->PCM start-up underrun**: on a device without DSD support (e.g. the laptop's Senary codec), the first ~0.5 s of a DSD track can underrun 4-6 times (a short tick at the very start). Steady-state playback is clean; FLAC/WAV are unaffected. Three fix rounds did not remove it. Ideas for 1.0.1: pre-convert the first DSD block before starting the stream; start the device only once the cushion is full; faster first FIR pass (table-driven DSD->PCM). [lyra-dsd, lyra-engine, lyra-output]
+## Known issue shipped in 1.0 (ADR-015) - fix in 1.0.2
+- [ ] **DSD->PCM start-up underrun**: on a device without DSD support (e.g. the laptop's Senary codec), the first ~0.5 s of a DSD track can underrun 4-6 times (a short tick at the very start). Steady-state playback is clean; FLAC/WAV are unaffected. Three fix rounds did not remove it. Ideas for 1.0.2: pre-convert the first DSD block before starting the stream; start the device only once the cushion is full; faster first FIR pass (table-driven DSD->PCM). [lyra-dsd, lyra-engine, lyra-output]
 
 ## P8.7 reviewer nits (1.0.0)
 
@@ -150,5 +150,5 @@ stale — the shipped binary links **no FFmpeg / LGPL** (confirmed via
 Those ADRs are lyra-architect's files and were not edited here; see `THIRD-PARTY-NOTICES.md`
 for the same observation so the orchestrator can relay it.
 
-## Known issue shipped in 1.0 (ADR-016) - fix in 1.0.1
+## Known issue shipped in 1.0 (ADR-016) - fix in 1.0.2
 - [ ] **Underruns on track change / seek / queue reload**: 30-min real-device soak = 460 underruns (1922 events) over 823 transitions after two fix rounds (from ~3,000). Ring is re-primed on open/seek/reload (cdef11a), navigation coalesced (4425dc4), post-flush grace window (a1b44a4) - still not zero. Hoai is researching a root-cause fix. Leads: keep the device running with the old tail while the new stream fills (crossfade-free double buffer), prime BEFORE flushing, larger cushion on transitions, measure fill time per transition, verify gapless natural transitions on the real device separately from user seeks, and report raw vs suppressed counts. [lyra-engine, lyra-output, lyra-qa]

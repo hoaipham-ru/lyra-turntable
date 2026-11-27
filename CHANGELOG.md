@@ -3,6 +3,12 @@
 All notable changes to Lyra Turntable are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## 1.0.1 — 2026-11-27
+
+### Fixed
+- **Track length now shows and the seek bar works** with the Lyra engine (all formats, incl. DSD). The engine event fields went to the UI in snake_case (duration_seconds, it_perfect, …) while the UI reads camelCase, so the length stayed 0:00, the seek bar and needle drop were disabled, and the bit-perfect flag was not read. Fixed with ename_all_fields; regression test added.
+- The playlist picker count (Default Playlist · N) now updates when the list changes.
+
 ## 1.0.0 — 2026-11-27
 
 **Lyra is now a standalone high-end audio engine.** It decodes and plays FLAC, WAV and
@@ -69,12 +75,12 @@ foobar2000**. foobar2000 remains only as an optional, hidden legacy backend.
   development laptop's built-in Senary codec), starting a DSD track through the DSD→PCM
   path produces **4–6 output underruns during roughly the first 0.5 s** of the track.
   This affects **start-up only**: once playback is running, DSD→PCM is clean, and
-  **FLAC and WAV are not affected** by this one. A fix is planned for **1.0.1**.
+  **FLAC and WAV are not affected** by this one. A fix is planned for **1.0.2**.
 - **Underruns on track change / seek (ADR-016).** Jumps (next/previous, seek, new queue)
   flush and refill the output ring; on the real device the refill can lag for a moment.
   30-minute real-device soak: **460 underruns over 823 transitions** (from ~3,000 before
   the 1.0 fixes). Steady playback is clean and bit-perfect; a short tick can be heard at a
-  jump. Root-cause fix planned for **1.0.1**.
+  jump. Root-cause fix planned for **1.0.2**.
 
 ### Pending — hardware
 Built and unit-tested, but not yet verified on real hardware because the development

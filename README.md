@@ -40,7 +40,7 @@ is the default and only normal backend.
 
 - Tauri v2 (Rust + WebView2), React 18, TypeScript, Vite
 - Transparent, frameless window
-- Current version: **1.0.0 (release candidate)** — FLAC, WAV and DSD (DSF/DFF), bit-perfect, no foobar2000 needed. Certification is not finished yet: see [Status](#status-as-of-2026-11-27)
+- Current version: **1.0.1** — FLAC, WAV and DSD (DSF/DFF), bit-perfect, no foobar2000 needed. Shipped with known underrun issues: see [Known issues](#known-issues) and [Status](#status-as-of-2026-11-27)
 
 > The UI is in English (song titles are shown as tagged). All strings live in one table (`src/strings.ts`), so a language toggle can be added later.
 
@@ -62,7 +62,7 @@ and closes it only if Lyra started it.
 ## 2. Installation
 
 **Option 1: installer**
-Run `Lyra Turntable_1.0.0_x64-setup.exe`. It installs for the current user only, to
+Run `Lyra Turntable_1.0.1_x64-setup.exe`. It installs for the current user only, to
 `%LOCALAPPDATA%\Lyra Turntable\lyra.exe`, with no admin rights needed.
 
 On first launch Lyra does a **one-time, read-only import** of any foobar2000 v2
@@ -223,8 +223,8 @@ it matches, file by file — which it now does for FLAC and WAV against libFLAC.
 - **Native DSD over ASIO** and **DoP over WASAPI** are implemented and unit-tested, but their end-to-end hardware verification is **pending a DSD-capable DAC** — the dev laptop cannot output raw DSD. See the release notes for the full pending list.
 
 ### Known issues
-- **DSD→PCM start-up underrun (fix planned for 1.0.1):** on a device without DSD support (e.g. the laptop's built-in Senary codec), the first ~0.5 s of a DSD track can underrun 4–6 times as playback starts. This is start-up only — steady-state DSD→PCM is clean.
-- **Underruns on track change / seek (fix planned for 1.0.1, ADR-016):** when playback jumps — next/previous track, seek, a new queue — the output ring is flushed and refilled, and on the real device the refill can lag the device for a moment. The 30-minute real-device soak still counted **460 underruns over 823 transitions** (down from ~3,000 before the 1.0 fixes). Steady playback within a track is clean and the output stays bit-perfect; what you may hear is a short tick right at a jump.
+- **DSD→PCM start-up underrun (fix planned for 1.0.2):** on a device without DSD support (e.g. the laptop's built-in Senary codec), the first ~0.5 s of a DSD track can underrun 4–6 times as playback starts. This is start-up only — steady-state DSD→PCM is clean.
+- **Underruns on track change / seek (fix planned for 1.0.2, ADR-016):** when playback jumps — next/previous track, seek, a new queue — the output ring is flushed and refilled, and on the real device the refill can lag the device for a moment. The 30-minute real-device soak still counted **460 underruns over 823 transitions** (down from ~3,000 before the 1.0 fixes). Steady playback within a track is clean and the output stays bit-perfect; what you may hear is a short tick right at a jump.
 
 ### Status as of 2026-11-27
 
@@ -236,10 +236,10 @@ it matches, file by file — which it now does for FLAC and WAV against libFLAC.
 - 30-minute soak on the real device (823 track changes/seeks): no memory growth (0.05 MB/min).
 - Uninstall test (automated) passed; P8 release hygiene (version 1.0.0, third-party notices) done.
 
-**Shipped with known issues (ADR-015, ADR-016)** — Hoai decided on 2026-11-27 to release 1.0.0 with the underrun issues above documented and to fix them properly in 1.0.1. The QA gate is therefore *not* a clean pass on underruns.
+**Shipped with known issues (ADR-015, ADR-016)** — Hoai decided on 2026-11-27 to release 1.0.0 with the underrun issues above documented and to fix them properly in 1.0.2. The QA gate is therefore *not* a clean pass on underruns.
 
 **Still pending**
-- Underrun fixes (DSD start-up, track change / seek) — 1.0.1.
+- Underrun fixes (DSD start-up, track change / seek) — 1.0.2.
 - UI tests in the real WebView2 window (needs tauri-driver + msedgedriver).
 - Hardware checks that need equipment: loopback A/B vs foobar2000, CPU comparison vs foobar2000, ASIO on the Sony NW-A55 (Sony driver), native DSD / DoP on a DSD-capable DAC.
 

@@ -99,7 +99,11 @@ pub enum UiCommand {
 /// webview-friendly derived fields: seconds alongside frames, and a ready-to-show
 /// format badge string so the UI never has to assemble it.
 #[derive(Debug, Clone, Serialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+// `rename_all` only renames the variant tags; `rename_all_fields` is what turns the
+// struct-variant fields (duration_seconds, bit_perfect, source_desc, ...) into the
+// camelCase names the webview reads. Without it the track length was never shown
+// and seeking stayed disabled (2026-11-27).
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum EnginePayload {
     /// Transport state changed. `state` is `"playing" | "paused" | "stopped"`.
     State {
@@ -457,5 +461,36 @@ pub fn devices() -> Result<Vec<DeviceDto>, String> {
 pub fn shutdown_on_exit(app: &AppHandle) {
     if let Some(state) = app.try_state::<EngineState>() {
         stop(&state);
+    }
+}
+
+#[cfg(test)]
+mod payload_field_names {
+    use super::EnginePayload;
+
+    // The webview reads camelCase field names (durationSeconds, bitPerfect, ...).
+    // Regression test for the 1.0.0 bug where they went out as snake_case, so the
+    // track length showed 0:00 and the seek bar stayed disabled.
+    #[test]
+    fn struct_variant_fields_are_camel_case() {
+        let track = EnginePayload::Track {
+            path: "a.dff".into(),
+            title: None,
+            artist: None,
+            album: None,
+            duration_frames: Some(994_049_280),
+            duration_seconds: Some(352.2),
+            source: Some("DFF".into()),
+        };
+        let j = serde_json::to_value(&track).unwrap();
+        assert_eq!(j["kind"], "track");
+        assert_eq!(j["durationSeconds"], 352.2);
+        assert_eq!(j["durationFrames"], 994_049_280u64);
+        assert!(j.get("duration_seconds").is_none());
+
+        let fmt = EnginePayload::Format { source_desc: "DSD64".into(), device_desc: "24/176.4".into(), bit_perfect: false, badge: "b".into() };
+        let j = serde_json::to_value(&fmt).unwrap();
+        assert_eq!(j["bitPerfect"], false);
+        assert_eq!(j["sourceDesc"], "DSD64");
     }
 }
