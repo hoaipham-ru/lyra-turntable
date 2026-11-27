@@ -65,9 +65,9 @@ and closes it only if Lyra started it.
 Run `Lyra Turntable_1.0.1_x64-setup.exe`. It installs for the current user only, to
 `%LOCALAPPDATA%\Lyra Turntable\lyra.exe`, with no admin rights needed.
 
-On first launch Lyra does a **one-time, read-only import** of any foobar2000 v2
-playlists it finds (`%APPDATA%\foobar2000-v2\playlists-v2.0\`) so returning users keep
-their lists. Your foobar2000 files are never modified.
+Lyra is a standalone app and keeps its own playlists. It does **not** import foobar2000's
+playlists; they appear only if you switch to the legacy foobar2000 backend (read live from
+foobar2000). Your foobar2000 files are never touched.
 
 **Option 2: build from source**
 ```powershell
@@ -233,7 +233,7 @@ it matches, file by file — which it now does for FLAC and WAV against libFLAC.
 **Done**
 - FLAC + WAV decode bit-identical to libFLAC across the 82-file corpus; bit-perfect to the WASAPI API boundary.
 - DSD (DSF/DFF) playback via DSD→PCM. Perf check on the real device: FLAC 24/192 **0** underruns, bit-perfect; CPU ~0.4 % (FLAC) / ~1.5 % (DSD), ~14 MB RAM.
-- Native backend is the default; one-time read-only import of foobar2000 playlists.
+- Native backend is the default; Lyra keeps its own playlists (no foobar2000 import since 1.0.1).
 - UI 0.4.1 fixes (English UI, working dropdowns, device volume knob, playlist select/reorder) pass component and browser tests (UI gate P8.3b).
 - 30-minute soak on the real device (823 track changes/seeks): no memory growth (0.05 MB/min).
 - Uninstall test (automated) passed; P8 release hygiene (version 1.0.0, third-party notices) done.

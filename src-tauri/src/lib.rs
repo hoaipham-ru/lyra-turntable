@@ -266,11 +266,9 @@ pub fn run() {
             // players at once.
             let native = settings::load(app.handle()).backend == "native";
             if native {
-                // First native startup: one-time, read-only import of foobar2000 v2
-                // playlists if that profile happens to exist. Off the startup thread so
-                // a slow or failed migration can never block the window from opening.
-                let handle = app.handle().clone();
-                thread::spawn(move || library::migrate_foobar_once(&handle));
+                // Lyra is a standalone app: it does NOT import foobar2000's playlists.
+                // foobar2000's playlists appear only when the user switches to the
+                // legacy foobar2000 backend (read live through Beefweb). (Hoai, 2026-11-27)
             } else if !foobar_running() {
                 // Legacy backend selected. Only launch foobar2000 if it is installed;
                 // if not, fail gracefully (do not crash, do not silently launch) — the

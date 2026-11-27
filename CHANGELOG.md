@@ -13,10 +13,10 @@ This project follows [Semantic Versioning](https://semver.org/).
   are decoded by symphonia to float and quantised once to 24-bit integers (peak and RMS match ffmpeg to 0.001 dB on a test MP3). Their full parity tests against foobar2000 (P1b) are still pending; MP3 encoder delay/padding is not trimmed yet (~20-40 ms of extra silence at the start).
 - A playback error (e.g. a file the engine cannot decode) now shows as a toast instead of
   failing silently.
-- **No more two "Default Playlist" entries.** foobar2000's own scratch playlist is now
-  imported as "Default Playlist (foobar2000)", and an existing duplicate is renamed to
-  "Default Playlist (2)" automatically.
-
+- **Lyra no longer imports foobar2000's playlists.** Lyra is a standalone app with its own
+  playlists; foobar2000's playlists show up only when you switch to the legacy foobar2000
+  backend (read live). Extra "Default Playlist" copies left by the old import (incl.
+  "Default Playlist (foobar2000)" / "(2)") are removed automatically; other playlists are kept.
 ## 1.0.0 — 2026-11-27
 
 **Lyra is now a standalone high-end audio engine.** It decodes and plays FLAC, WAV and
@@ -44,7 +44,7 @@ foobar2000**. foobar2000 remains only as an optional, hidden legacy backend.
   remove, drag to reorder (Lyra backend).
 - **English UI** throughout (song titles shown as tagged), app-drawn dropdowns (native
   `<select>` popups do not open in the transparent window).
-- **One-time, read-only import** of foobar2000 v2 playlists on first native startup, so
+- *(Removed in 1.0.1)* **One-time, read-only import** of foobar2000 v2 playlists on first native startup, so
   returning users keep their lists. foobar2000 files are never modified.
 - Single string table (`src/strings.ts`) with English (active) and Vietnamese entries,
   ready for a language toggle.

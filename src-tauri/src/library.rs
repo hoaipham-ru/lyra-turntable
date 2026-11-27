@@ -131,6 +131,7 @@ fn track_dto(item: &TrackRef) -> TrackDto {
 /// profile is only ever read (never written — RUNBOOK forbidden). If no profile
 /// exists this is a no-op and the guard stays unset, so a later foobar2000 install
 /// can still be imported once. Any failure is swallowed so startup is never blocked.
+#[allow(dead_code)] // no longer run at startup (Lyra is standalone); kept for a future manual import
 pub fn migrate_foobar_once(app: &AppHandle) {
     if crate::settings::load(app).foobar_migrated {
         return; // already done: never re-run, never clobber user playlists

@@ -65,6 +65,18 @@ pub const DEFAULT_PLAYLIST_TITLE: &str = "Default Playlist";
 /// the picker, 2026-11-27).
 pub const IMPORTED_DEFAULT_TITLE: &str = "Default Playlist (foobar2000)";
 
+/// "Default Playlist (foobar2000)" or "Default Playlist (2)", "(3)", ...: copies left by
+/// 1.0.x pre-release builds that imported foobar2000's scratch playlist.
+fn is_stray_default_copy(title: &str) -> bool {
+    if title == IMPORTED_DEFAULT_TITLE {
+        return true;
+    }
+    title
+        .strip_prefix("Default Playlist (")
+        .and_then(|r| r.strip_suffix(')'))
+        .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+}
+
 /// foobar2000 names its scratch playlist "Default" (older) or "Default Playlist".
 fn is_default_title(title: &str) -> bool {
     let t = title.trim().to_ascii_lowercase();
@@ -284,32 +296,37 @@ impl Playlists {
         Ok((id, count))
     }
 
-    /// Keep exactly one playlist titled [`DEFAULT_PLAYLIST_TITLE`]: the first one
-    /// (by position, id) keeps it, any later ones are renamed to
-    /// "Default Playlist (2)", "(3)", ... Returns how many were renamed.
+    /// Keep exactly one "Default Playlist". Lyra is standalone, so any extra copies
+    /// (a second "Default Playlist", or the "Default Playlist (foobar2000)" /
+    /// "Default Playlist (N)" copies made by 1.0.x pre-release builds when they still
+    /// imported foobar2000's scratch playlist) are removed. The first one by
+    /// (position, id) is kept. Returns how many were removed.
     ///
     /// # Errors
     /// Returns [`LyraError::Io`] on a database error.
     pub fn dedupe_default_titles(&mut self) -> Result<usize> {
-        let ids: Vec<i64> = {
+        let rows: Vec<(i64, String)> = {
             let mut stmt = self
                 .conn
-                .prepare("SELECT id FROM playlists WHERE title = ?1 ORDER BY position, id")
+                .prepare("SELECT id, title FROM playlists ORDER BY position, id")
                 .map_err(|e| db_err("dedupe default", &e))?;
-            let rows = stmt
-                .query_map(params![DEFAULT_PLAYLIST_TITLE], |r| r.get(0))
+            let it = stmt
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
                 .map_err(|e| db_err("dedupe default", &e))?;
-            rows.collect::<std::result::Result<_, _>>()
+            it.collect::<std::result::Result<_, _>>()
                 .map_err(|e| db_err("dedupe default", &e))?
         };
-        let mut renamed = 0;
-        for (n, id) in ids.iter().skip(1).enumerate() {
-            // Neutral name: an existing store cannot tell which copy came from foobar2000.
-            let title = format!("{DEFAULT_PLAYLIST_TITLE} ({})", n + 2);
-            self.rename(*id, &title)?;
-            renamed += 1;
+        let mut kept = false;
+        let mut removed = 0;
+        for (id, title) in rows {
+            if title == DEFAULT_PLAYLIST_TITLE && !kept {
+                kept = true;
+            } else if title == DEFAULT_PLAYLIST_TITLE || is_stray_default_copy(&title) {
+                self.remove(id)?;
+                removed += 1;
+            }
         }
-        Ok(renamed)
+        Ok(removed)
     }
 
     /// The items of a playlist, in playback order.
@@ -779,21 +796,24 @@ mod default_title_tests {
     use super::*;
 
     #[test]
-    fn duplicate_default_titles_are_renamed_and_one_default_remains() {
+    fn extra_default_copies_are_removed_and_one_default_remains() {
         let dir = std::env::temp_dir().join(format!("lyra-dedupe-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let db = dir.join("p.sqlite");
         let _ = std::fs::remove_file(&db);
         let mut store = Playlists::open(&db).unwrap();
         let a = store.create(DEFAULT_PLAYLIST_TITLE, false).unwrap();
-        let b = store.create(DEFAULT_PLAYLIST_TITLE, false).unwrap();
+        store.create(DEFAULT_PLAYLIST_TITLE, false).unwrap();
+        store.create("Default Playlist (2)", false).unwrap();
+        store.create(IMPORTED_DEFAULT_TITLE, false).unwrap();
+        let keep = store.create("hoai-test", false).unwrap();
+        let mine = store.create("Default Playlist (live)", false).unwrap();
         let (id, _) = store.ensure_default().unwrap();
         assert_eq!(id, a);
-        let titles: Vec<_> = store.list().unwrap().into_iter().map(|p| (p.id, p.title)).collect();
-        assert_eq!(titles.iter().filter(|(_, t)| t == DEFAULT_PLAYLIST_TITLE).count(), 1);
-        assert!(titles.iter().any(|(i, t)| *i == b && t == "Default Playlist (2)"));
+        let ids: Vec<i64> = store.list().unwrap().into_iter().map(|p| p.id).collect();
+        assert_eq!(ids, vec![a, keep, mine]);
         assert!(is_default_title("Default") && is_default_title(" default playlist "));
-        assert!(!is_default_title(IMPORTED_DEFAULT_TITLE));
+        assert!(!is_stray_default_copy("Default Playlist (live)"));
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);
     }
