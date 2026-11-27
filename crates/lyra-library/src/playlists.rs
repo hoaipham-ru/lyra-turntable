@@ -60,6 +60,17 @@ use lyra_core::{LyraError, Result, TrackRef};
 /// The reserved title of the Default Playlist.
 pub const DEFAULT_PLAYLIST_TITLE: &str = "Default Playlist";
 
+/// Title given to foobar2000's own scratch playlist when it is imported, so it
+/// never collides with Lyra's [`DEFAULT_PLAYLIST_TITLE`] (two identical names in
+/// the picker, 2026-11-27).
+pub const IMPORTED_DEFAULT_TITLE: &str = "Default Playlist (foobar2000)";
+
+/// foobar2000 names its scratch playlist "Default" (older) or "Default Playlist".
+fn is_default_title(title: &str) -> bool {
+    let t = title.trim().to_ascii_lowercase();
+    t == "default" || t == "default playlist"
+}
+
 /// A playlist header row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Playlist {
@@ -252,6 +263,7 @@ impl Playlists {
     /// # Errors
     /// Returns [`LyraError::Io`] on a database error.
     pub fn ensure_default(&mut self) -> Result<(i64, usize)> {
+        self.dedupe_default_titles()?;
         let existing: Option<i64> = self
             .conn
             .query_row(
@@ -270,6 +282,34 @@ impl Playlists {
         };
         let count = self.item_count(id)?;
         Ok((id, count))
+    }
+
+    /// Keep exactly one playlist titled [`DEFAULT_PLAYLIST_TITLE`]: the first one
+    /// (by position, id) keeps it, any later ones are renamed to
+    /// "Default Playlist (2)", "(3)", ... Returns how many were renamed.
+    ///
+    /// # Errors
+    /// Returns [`LyraError::Io`] on a database error.
+    pub fn dedupe_default_titles(&mut self) -> Result<usize> {
+        let ids: Vec<i64> = {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT id FROM playlists WHERE title = ?1 ORDER BY position, id")
+                .map_err(|e| db_err("dedupe default", &e))?;
+            let rows = stmt
+                .query_map(params![DEFAULT_PLAYLIST_TITLE], |r| r.get(0))
+                .map_err(|e| db_err("dedupe default", &e))?;
+            rows.collect::<std::result::Result<_, _>>()
+                .map_err(|e| db_err("dedupe default", &e))?
+        };
+        let mut renamed = 0;
+        for (n, id) in ids.iter().skip(1).enumerate() {
+            // Neutral name: an existing store cannot tell which copy came from foobar2000.
+            let title = format!("{DEFAULT_PLAYLIST_TITLE} ({})", n + 2);
+            self.rename(*id, &title)?;
+            renamed += 1;
+        }
+        Ok(renamed)
     }
 
     /// The items of a playlist, in playback order.
@@ -569,6 +609,8 @@ impl Playlists {
         let mut out = Vec::new();
         for (guid, title) in parse_index(&bytes) {
             let file = dir.join(format!("playlist-{guid}.fplite"));
+            // foobar2000's scratch playlist must not become a second "Default Playlist".
+            let title = if is_default_title(&title) { IMPORTED_DEFAULT_TITLE.to_string() } else { title };
             let result = if file.exists() {
                 self.import_fplite_with_title(&file, &title)
             } else {
@@ -730,6 +772,31 @@ fn find_subslice(hay: &[u8], needle: &[u8]) -> Option<usize> {
 /// Wrap a `rusqlite` error as a [`LyraError::Io`] with a context message.
 fn db_err(context: &str, e: &rusqlite::Error) -> LyraError {
     LyraError::Io(format!("playlist store ({context}): {e}"))
+}
+
+#[cfg(test)]
+mod default_title_tests {
+    use super::*;
+
+    #[test]
+    fn duplicate_default_titles_are_renamed_and_one_default_remains() {
+        let dir = std::env::temp_dir().join(format!("lyra-dedupe-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("p.sqlite");
+        let _ = std::fs::remove_file(&db);
+        let mut store = Playlists::open(&db).unwrap();
+        let a = store.create(DEFAULT_PLAYLIST_TITLE, false).unwrap();
+        let b = store.create(DEFAULT_PLAYLIST_TITLE, false).unwrap();
+        let (id, _) = store.ensure_default().unwrap();
+        assert_eq!(id, a);
+        let titles: Vec<_> = store.list().unwrap().into_iter().map(|p| (p.id, p.title)).collect();
+        assert_eq!(titles.iter().filter(|(_, t)| t == DEFAULT_PLAYLIST_TITLE).count(), 1);
+        assert!(titles.iter().any(|(i, t)| *i == b && t == "Default Playlist (2)"));
+        assert!(is_default_title("Default") && is_default_title(" default playlist "));
+        assert!(!is_default_title(IMPORTED_DEFAULT_TITLE));
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 #[cfg(test)]
@@ -966,10 +1033,12 @@ mod tests {
         let mut pl = mem();
         let report = pl.migrate_foobar_playlists(&profile).unwrap();
         assert_eq!(report.len(), 2);
-        assert_eq!(report[0].0, "Default Playlist");
+        // foobar2000's scratch playlist is imported under a distinct title so it
+        // never duplicates Lyra's own "Default Playlist".
+        assert_eq!(report[0].0, IMPORTED_DEFAULT_TITLE);
         let s = report[0].1.as_ref().unwrap();
         assert_eq!(s.imported, 2);
-        assert_eq!(pl.list().unwrap()[0].title, "Default Playlist");
+        assert_eq!(pl.list().unwrap()[0].title, IMPORTED_DEFAULT_TITLE);
         // Second playlist's file is missing: reported as an error, not guessed.
         assert_eq!(report[1].0, "hoai-test");
         assert!(report[1].1.is_err());

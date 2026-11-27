@@ -13,6 +13,8 @@ libflac-check = []
 
 [dependencies]
 lyra-core = { path = "../lyra-core" }
-symphonia = { version = "0.5", default-features = false, features = ["flac", "wav", "pcm"] }
+# flac/wav/pcm are the parity-tested 1.0 formats. mp3/aac/alac/isomp4/ogg/vorbis/aiff were
+# enabled early (1.0.1) so common files play; their P1b parity tests are still pending.
+symphonia = { version = "0.5", default-features = false, features = ["flac", "wav", "pcm", "mp3", "aac", "alac", "isomp4", "ogg", "vorbis", "aiff"] }
 
 [dev-dependencies]

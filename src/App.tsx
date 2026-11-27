@@ -360,6 +360,10 @@ export default function App() {
   useEffect(() => {
     listRef.current?.querySelector<HTMLElement>("[data-current=true]")?.scrollIntoView({ block: "nearest" });
   }, [p.current]);
+  // Playback errors (e.g. a format the engine cannot decode) show as a toast.
+  useEffect(() => {
+    if (p.lastError) say(`Cannot play: ${p.lastError.message}`);
+  }, [p.lastError?.seq]);
   // A different playlist or a changed list invalidates the selection.
   useEffect(() => { setSel(new Set()); anchor.current = -1; }, [p.selected, p.list.length]);
 

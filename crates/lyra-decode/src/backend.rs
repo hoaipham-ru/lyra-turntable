@@ -7,7 +7,10 @@ use std::path::Path;
 use lyra_core::{Decoder, LyraError, PcmSpec, Result, StreamSpec, TagMap};
 
 use symphonia::core::audio::{AudioBufferRef, Signal};
-use symphonia::core::codecs::{Decoder as SymDecoder, DecoderOptions, CODEC_TYPE_FLAC};
+use symphonia::core::codecs::{
+    Decoder as SymDecoder, DecoderOptions, CODEC_TYPE_AAC, CODEC_TYPE_ALAC, CODEC_TYPE_FLAC, CODEC_TYPE_MP3,
+    CODEC_TYPE_VORBIS,
+};
 use symphonia::core::errors::Error as SymError;
 use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo};
 use symphonia::core::io::{MediaSource, MediaSourceStream, MediaSourceStreamOptions};
@@ -64,7 +67,14 @@ impl FlacWavDecoder {
         let track_id = track.id;
         let params = track.codec_params.clone();
 
-        let codec = if params.codec == CODEC_TYPE_FLAC { "flac" } else { "wav" };
+        let codec = match params.codec {
+            c if c == CODEC_TYPE_FLAC => "flac",
+            c if c == CODEC_TYPE_MP3 => "mp3",
+            c if c == CODEC_TYPE_AAC => "aac",
+            c if c == CODEC_TYPE_ALAC => "alac",
+            c if c == CODEC_TYPE_VORBIS => "vorbis",
+            _ => "wav",
+        };
 
         let rate = params
             .sample_rate

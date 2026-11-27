@@ -81,7 +81,7 @@ pub struct ProbeInfo {
     pub spec: StreamSpec,
     /// Exact length in source frames (`None` if the container does not state it).
     pub total_frames: Option<u64>,
-    /// Codec name: `"flac"` or `"wav"`.
+    /// Codec name: `"flac"`, `"wav"` (any PCM container), `"mp3"`, `"aac"`, `"alac"` or `"vorbis"`.
     pub codec: &'static str,
     /// Metadata tags.
     pub tags: TagMap,

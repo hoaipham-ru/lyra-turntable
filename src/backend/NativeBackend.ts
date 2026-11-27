@@ -89,6 +89,7 @@ export function useNativeBackend(): PlayerBackend {
   const [format, setFormat] = useState<string | null>(null);
   const [bitPerfect, setBitPerfect] = useState<boolean>(true);
   const [underruns, setUnderruns] = useState(0);
+  const [lastError, setLastError] = useState<{ message: string; seq: number } | null>(null);
   // Device (endpoint) volume: applied by Windows after the render client, so the
   // stream itself stays bit-perfect. Device = the one chosen in Settings.
   const [volume, setVolumeState] = useState(1);
@@ -237,6 +238,7 @@ export function useNativeBackend(): PlayerBackend {
           break;
         case "error":
           setStatus(ev.message);
+          setLastError((e) => ({ message: ev.message, seq: (e?.seq ?? 0) + 1 }));
           break;
       }
     };
@@ -372,6 +374,7 @@ export function useNativeBackend(): PlayerBackend {
     },
     playIn: (id, i) => void play(id, i),
     playingPlaylist: playingPl,
+    lastError,
     // Forward-looking fields the native engine fills in (P4+).
     format,
     bitPerfect,

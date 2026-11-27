@@ -173,6 +173,9 @@ pub fn migrate_foobar_once(app: &AppHandle) {
 #[tauri::command]
 pub fn playlists_list(app: AppHandle, state: State<'_, LibraryState>) -> Result<Vec<PlaylistDto>, String> {
     with_store(&app, &state, |store| {
+        // Repair stores where foobar2000's scratch playlist was imported as a second
+        // "Default Playlist" (1.0.0): keep one, rename the rest.
+        store.dedupe_default_titles().map_err(|e| e.to_string())?;
         let playlists = store.list().map_err(|e| e.to_string())?;
         let mut out = Vec::with_capacity(playlists.len());
         for p in playlists {

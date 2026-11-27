@@ -186,7 +186,9 @@ If you switch to the legacy backend:
 **1.0 (shipping):** FLAC, WAV, and DSD — `.dsf` and `.dff` (uncompressed DSD). All
 bit-perfect, decoded by Lyra itself.
 
-**After 1.0:** ALAC, AIFF, MP3, AAC, Vorbis, Opus, WavPack and APE, plus the ability to
+**Also playable since 1.0.1 (not yet parity-tested, P1b):** MP3, AAC/M4A, ALAC, Ogg Vorbis, AIFF.
+
+**After 1.0:** Opus, WavPack and APE, plus the ability to
 load foobar2000 components as an optional bridge, are planned but **not in 1.0**. Until
 then, those formats only play through the legacy foobar2000 backend.
 

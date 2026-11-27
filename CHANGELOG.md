@@ -8,6 +8,14 @@ This project follows [Semantic Versioning](https://semver.org/).
 ### Fixed
 - **Track length now shows and the seek bar works** with the Lyra engine (all formats, incl. DSD). The engine event fields went to the UI in snake_case (duration_seconds, it_perfect, …) while the UI reads camelCase, so the length stayed 0:00, the seek bar and needle drop were disabled, and the bit-perfect flag was not read. Fixed with ename_all_fields; regression test added.
 - The playlist picker count (Default Playlist · N) now updates when the list changes.
+- **MP3 (and AAC/M4A, ALAC, Ogg Vorbis, AIFF) now play** in the Lyra engine. In 1.0.0 only
+  FLAC/WAV/DSD decoded, so choosing an MP3 did nothing and showed no error. These formats
+  are decoded by symphonia; their parity tests against foobar2000 (P1b) are still pending.
+- A playback error (e.g. a file the engine cannot decode) now shows as a toast instead of
+  failing silently.
+- **No more two "Default Playlist" entries.** foobar2000's own scratch playlist is now
+  imported as "Default Playlist (foobar2000)", and an existing duplicate is renamed to
+  "Default Playlist (2)" automatically.
 
 ## 1.0.0 — 2026-11-27
 
