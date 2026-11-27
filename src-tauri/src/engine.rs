@@ -315,11 +315,14 @@ fn stop(state: &EngineState) {
 }
 
 /// Ensure an engine is running, lazily starting it from persisted settings.
-fn ensure_started(app: &AppHandle, state: &EngineState) -> Result<(), String> {
+/// Start the engine if it is not running. Returns `true` when it was started now
+/// (its queue is then empty).
+fn ensure_started(app: &AppHandle, state: &EngineState) -> Result<bool, String> {
     if state.0.lock().unwrap().is_some() {
-        return Ok(());
+        return Ok(false);
     }
-    start(app, state, settings::load(app).to_engine_config())
+    start(app, state, settings::load(app).to_engine_config())?;
+    Ok(true)
 }
 
 // --- Commands ---------------------------------------------------------------
@@ -360,8 +363,15 @@ pub fn engine_running(state: State<'_, EngineState>) -> bool {
 /// Send a transport command, lazily starting the engine from persisted settings
 /// on the first command. Never blocks on decode or device I/O.
 #[tauri::command]
-pub fn engine_send(app: AppHandle, state: State<'_, EngineState>, cmd: UiCommand) -> Result<(), String> {
-    ensure_started(&app, &state)?;
+pub fn engine_send(app: AppHandle, state: State<'_, EngineState>, cmd: UiCommand) -> Result<bool, String> {
+    // Returns true when the engine had to be (re)started for this command, e.g.
+    // after a switch to the foobar2000 backend shut it down. Its queue is then
+    // empty, so Play/Next/Prev are NOT forwarded: the webview reloads the queue and
+    // plays the intended track instead.
+    let fresh = ensure_started(&app, &state)?;
+    if fresh && matches!(cmd, UiCommand::Play | UiCommand::Next | UiCommand::Prev) {
+        return Ok(true);
+    }
     let guard = state.0.lock().unwrap();
     let runtime = guard.as_ref().ok_or("engine not running")?;
     let engine_cmd = match cmd {
@@ -383,7 +393,7 @@ pub fn engine_send(app: AppHandle, state: State<'_, EngineState>, cmd: UiCommand
     if let Some(handle) = runtime.handle.as_ref() {
         handle.send(engine_cmd);
     }
-    Ok(())
+    Ok(fresh)
 }
 
 // --- Device enumeration -----------------------------------------------------

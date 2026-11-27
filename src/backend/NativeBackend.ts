@@ -105,6 +105,8 @@ export function useNativeBackend(): PlayerBackend {
   // index within it the engine is playing (derived from the track path).
   const [playingPl, setPlayingPl] = useState<string | null>(null);
   const [playingIdx, setPlayingIdx] = useState(-1);
+  const playingIdxRef = useRef(-1);
+  playingIdxRef.current = playingIdx;
 
   // Refs the event handler and the synchronous transport methods read without
   // re-subscribing on every state change.
@@ -202,6 +204,29 @@ export function useNativeBackend(): PlayerBackend {
     [pathsOf, send],
   );
 
+  // Transport keys. If the engine had to be restarted (e.g. after the foobar2000
+  // backend shut it down) its queue is empty: reload it and play the intended track.
+  const transport = useCallback(
+    async (type: "play" | "pause" | "next" | "prev") => {
+      if (!inTauri) return;
+      const fresh = await invoke<boolean>("engine_send", { cmd: { type } }).catch(() => false);
+      if (!fresh) return;
+      if (type === "pause") {
+        // A fresh engine is idle: show that instead of a stale "playing".
+        setState("stopped");
+        return;
+      }
+      const id = queueOwner.current ?? selRef.current;
+      if (!id) return;
+      const n = (await pathsOf(id)).length;
+      if (!n) return;
+      const cur = Math.max(0, playingIdxRef.current);
+      const i = type === "next" ? Math.min(n - 1, cur + 1) : type === "prev" ? Math.max(0, cur - 1) : cur;
+      await play(id, i);
+    },
+    [pathsOf, play],
+  );
+
   // Subscribe to the engine event stream and map events onto React state.
   useEffect(() => {
     if (!inTauri) {
@@ -279,9 +304,9 @@ export function useNativeBackend(): PlayerBackend {
     selected,
     list,
     current: playingPl && playingPl === selected ? playingIdx : -1,
-    playPause: () => send({ type: stateRef.current === "playing" ? "pause" : "play" }),
-    next: () => send({ type: "next" }),
-    prev: () => send({ type: "prev" }),
+    playPause: () => void transport(stateRef.current === "playing" ? "pause" : "play"),
+    next: () => void transport("next"),
+    prev: () => void transport("prev"),
     seek: (s) => {
       setPos(s); // optimistic; the next position event confirms it
       send({ type: "seek", seconds: s });

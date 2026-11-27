@@ -11,7 +11,7 @@ This project follows [Semantic Versioning](https://semver.org/).
 - **MP3 (and AAC/M4A, ALAC, Ogg Vorbis, AIFF) now play** in the Lyra engine. In 1.0.0 only
   FLAC/WAV/DSD decoded, so choosing an MP3 did nothing and showed no error. These formats
   are decoded by symphonia to float and quantised once to 24-bit integers (peak and RMS match ffmpeg to 0.001 dB on a test MP3). Their full parity tests against foobar2000 (P1b) are still pending; MP3 encoder delay/padding is not trimmed yet (~20-40 ms of extra silence at the start).
-- Switching to the foobar2000 backend and back no longer breaks playback ("PlayAt(i) out of range"): the queue is reloaded before every play, since the engine is restarted on a backend switch.
+- Switching to the foobar2000 backend and back no longer breaks playback ("PlayAt(i) out of range"): the queue is reloaded before every play, and PLAY / NEXT / PREV on a freshly restarted engine reload the queue and play the intended track.
 - A playback error (e.g. a file the engine cannot decode) now shows as a toast instead of
   failing silently.
 - **Lyra no longer imports foobar2000's playlists.** Lyra is a standalone app with its own
