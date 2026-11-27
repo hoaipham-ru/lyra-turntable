@@ -130,3 +130,5 @@ Honest list of what is still weak or unverified. Owners in brackets.
 ### Process
 - [ ] **Agent scripts can be wrong silently**: p8_perf.ps1 first crashed, then "measured" an idle process because PowerShell 5.1 split a path with spaces. QA scripts need a self-check (errors counter, non-zero frames) before numbers are trusted. [lyra-qa]
 - [ ] **Stopping a run mid-wave leaves orphans** (chain-*.sh bash processes survive taskkill /T; an orphan started the soak and left the headphones muted). Orchestrator should register background chains in STATUS so a stop can kill them. [orchestrator]
+## Known issue shipped in 1.0 (ADR-015) - fix in 1.0.1
+- [ ] **DSD->PCM start-up underrun**: on a device without DSD support (e.g. the laptop's Senary codec), the first ~0.5 s of a DSD track can underrun 4-6 times (a short tick at the very start). Steady-state playback is clean; FLAC/WAV are unaffected. Three fix rounds did not remove it. Ideas for 1.0.1: pre-convert the first DSD block before starting the stream; start the device only once the cushion is full; faster first FIR pass (table-driven DSD->PCM). [lyra-dsd, lyra-engine, lyra-output]
