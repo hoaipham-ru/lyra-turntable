@@ -38,7 +38,7 @@ use windows::Win32::Media::Audio::AUDCLNT_E_DEVICE_INVALIDATED;
 use crate::handle::OutputHandle;
 use crate::mmcss::ProAudioGuard;
 use crate::negotiate::{negotiate_exclusive, ExclusiveFormat, PROBE_CANDIDATES};
-use crate::ring::{pull_into, service_flush, silence};
+use crate::ring::{pull_into, service_flush, silence, FlushGrace};
 use crate::stats::SharedStats;
 use crate::tap::{make_tap, TapDrain, TapWriter};
 use crate::types::{DeviceId, DeviceInfo, DeviceProbe, OutputOptions, PROBE_RATES};
@@ -477,6 +477,21 @@ fn run_loop(run: &mut RunState, stats: &SharedStats, stop: &std::sync::atomic::A
         return;
     }
 
+    // Post-flush reprime grace (ADR-013 extension; see `FlushGrace`). A flush is a
+    // deliberate discontinuity, and the engine reprimes the ring to its cushion
+    // right after the drain; the still-empty ring during that reprime must not be
+    // counted as an underrun. Exit grace once the ring holds a whole device buffer
+    // again (`low_water`), or after `grace_cap` feeder iterations so a producer that
+    // never reprimes still surfaces underruns.
+    let low_water = run.buffer_frames * run.bytes_per_frame;
+    // Safety cap ≈ 1 s of feeder iterations (one iteration ≈ one device period).
+    // The low-water early-exit ends grace as soon as the reprime lands — normally a
+    // few device periods (the soak saw ~3-4 empty buffers per transition) — so the
+    // cap only bounds the pathological "producer never reprimes" case: a genuine
+    // post-flush stall surfaces within ~1 s instead of being masked forever.
+    let grace_cap = (1000 / run.period_ms.max(1)).max(16);
+    let mut grace = FlushGrace::new(low_water, grace_cap);
+
     while !stop.load(Ordering::Acquire) {
         // Wait for the device to want more data.
         match &run.event {
@@ -514,6 +529,9 @@ fn run_loop(run: &mut RunState, stats: &SharedStats, stop: &std::sync::atomic::A
 
         let frames = avail.min(run.buffer_frames);
         let bytes = frames * run.bytes_per_frame;
+        // Sample the ring level after the flush drain and before the pull: it shows
+        // how far the producer has reprimed, which drives the grace exit below.
+        let ring_level = run.consumer.slots();
         let pull = pull_into(&mut run.consumer, &mut run.scratch[..bytes]);
         let data = &run.scratch[..bytes];
         if let Some(tap) = run.tap.as_mut() {
@@ -522,9 +540,11 @@ fn run_loop(run: &mut RunState, stats: &SharedStats, stop: &std::sync::atomic::A
         match run.render.write_to_device(frames, data, None) {
             Ok(()) => {
                 stats.frames_played.fetch_add(frames as u64, Ordering::Relaxed);
-                // A flush this iteration means the gap is an intentional discard,
-                // not the producer falling behind: do not count it as an underrun.
-                if pull.underrun && !flushed {
+                // Count an underrun only when it is genuine starvation. A flush this
+                // iteration is an intentional discard, and the bounded post-flush
+                // grace covers the reprime window that follows it; steady playback
+                // (no flush) still counts every underrun. See `FlushGrace`.
+                if grace.count_underrun(flushed, ring_level, pull.underrun) {
                     stats.underruns.fetch_add(1, Ordering::Relaxed);
                 }
             }

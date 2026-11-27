@@ -93,6 +93,97 @@ pub fn pull_into(consumer: &mut Consumer<u8>, scratch: &mut [u8]) -> Pull {
     Pull { bytes_from_ring: got, underrun: got < want }
 }
 
+/// Post-flush grace accounting for the feeder (an implementation extension of
+/// ADR-013's principle that *deliberate post-flush silence is not an underrun*).
+///
+/// ADR-013 already suppresses the empty-ring silence rendered **during** a flush
+/// drain (the `flushed` iteration). But a flush is a deliberate discontinuity
+/// (seek / track-change / reload), and right after the drain the engine must
+/// **re-prime** the ring — decode and refill to its cushion — before steady
+/// playback resumes. On a real device the render clock keeps calling `GetBuffer`
+/// and drains the still-empty ring throughout that reprime window, so the feeder
+/// would flag an underrun on nearly every deliberate transition even though the
+/// gap is intentional, not the producer starving mid-playback.
+///
+/// [`FlushGrace`] closes that window. A flush **arms** a bounded grace state; while
+/// armed, empty-ring iterations still render silence (the device never starves)
+/// but do **not** count as underruns. Grace exits the moment the reprime lands —
+/// the ring level climbs back to `low_water` (one whole device buffer, so the next
+/// pull is guaranteed clean) — or after a `cap` of feeder iterations, so a producer
+/// that **never** reprimes after a flush still surfaces underruns instead of being
+/// masked forever.
+///
+/// Crucially, grace is entered **only** by a flush. Steady playback that never
+/// flushes keeps `remaining == 0`, so every mid-playback underrun is counted: the
+/// perf path stays honest.
+///
+/// Real-time safe: plain integer state; the per-iteration decision is branches and
+/// integer math over caller-owned fields. Legal on the MMCSS "Pro Audio" render
+/// thread (PLAN §5).
+#[derive(Debug)]
+pub struct FlushGrace {
+    /// Feeder iterations of grace still remaining; `0` means not in grace.
+    remaining: u32,
+    /// Safety cap: the maximum number of feeder iterations to stay in grace if the
+    /// reprime never lands (bounds how long a genuine post-flush stall is masked).
+    cap: u32,
+    /// Ring level (bytes) that means the reprime has landed. Set to one whole
+    /// device buffer, so reaching it guarantees the next pull fills completely.
+    low_water: usize,
+}
+
+impl FlushGrace {
+    /// `low_water`: ring bytes that signal the reprime landed (one device buffer).
+    /// `cap`: max feeder iterations to stay in grace if the reprime never lands.
+    #[must_use]
+    pub fn new(low_water: usize, cap: u32) -> Self {
+        Self { remaining: 0, cap, low_water }
+    }
+
+    /// `true` while a flush grace window is open. Test-only introspection.
+    #[cfg(test)]
+    #[must_use]
+    pub fn in_grace(&self) -> bool {
+        self.remaining > 0
+    }
+
+    /// Per-iteration underrun accounting for the feeder. Call once per device-buffer
+    /// iteration, after [`service_flush`] and [`pull_into`].
+    ///
+    /// * `flushed` — a flush was serviced this iteration (a deliberate discontinuity).
+    /// * `ring_level` — bytes readable in the ring this iteration (`Consumer::slots`),
+    ///   sampled **after** the flush drain and **before** the pull, so it reflects how
+    ///   far the producer has reprimed.
+    /// * `underrun` — the pull zero-filled part of the device buffer.
+    ///
+    /// Returns `true` if the caller should count this as an underrun, `false` if it
+    /// is deliberate post-discontinuity silence to suppress.
+    #[must_use]
+    pub fn count_underrun(&mut self, flushed: bool, ring_level: usize, underrun: bool) -> bool {
+        if flushed {
+            // Deliberate discontinuity: (re)arm the grace window. The buffer we
+            // zero-fill this iteration is the intentional discard, never an underrun.
+            self.remaining = self.cap;
+            return false;
+        }
+        if self.remaining > 0 {
+            if ring_level >= self.low_water {
+                // Reprime landed: a whole device buffer is queued again, so honest
+                // counting resumes immediately and a *later* stall is still caught.
+                self.remaining = 0;
+            } else {
+                // Still waiting for the engine to refill after the flush. The silence
+                // is deliberate; count down toward the safety cap so a producer that
+                // never reprimes eventually surfaces underruns.
+                self.remaining -= 1;
+                return false;
+            }
+        }
+        // Not in grace (steady playback) or the reprime just landed: count honestly.
+        underrun
+    }
+}
+
 /// Fill `scratch` entirely with PCM silence (zeros). Used to pre-fill the device
 /// buffer before `Start` so the first event does not underrun.
 ///
@@ -244,6 +335,125 @@ mod tests {
         let mut scratch = [0u8; 8];
         assert!(service_flush(&mut c, &mut scratch, &req, &ack));
         assert_eq!(ack.load(Ordering::Acquire), 3, "collapses skipped generations");
+    }
+
+    // --- FlushGrace: post-flush reprime accounting (ADR-013 extension) -------
+
+    /// Device buffer used by the grace tests: 8 bytes. `low_water` is one whole
+    /// device buffer, matching the backend's `buffer_frames * bytes_per_frame`.
+    const DEV_BUF: usize = 8;
+
+    #[test]
+    fn grace_suppresses_post_flush_reprime_gap() {
+        // After a flush the ring stays empty for several feeder iterations while a
+        // slow producer reprimes. Underruns must stay 0 throughout, and grace must
+        // exit (resume counting) once the ring refills past the low-water mark.
+        let (mut p, mut c) = RingBuffer::<u8>::new(64);
+        let req = AtomicU64::new(0);
+        let ack = AtomicU64::new(0);
+        let mut scratch = [0u8; DEV_BUF];
+        // cap huge so this test exercises the low-water exit, not the safety cap.
+        let mut grace = FlushGrace::new(DEV_BUF, 1000);
+        let mut underruns = 0u64;
+
+        // Steady playback had queued a buffer; the owner now requests a seek flush.
+        p.push_entire_slice(&[1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
+        req.store(1, Ordering::Release);
+
+        // Flush iteration: service_flush drains the ring, the pull renders silence.
+        let flushed = service_flush(&mut c, &mut scratch, &req, &ack);
+        assert!(flushed);
+        let ring_level = c.slots();
+        let pull = pull_into(&mut c, &mut scratch);
+        assert!(pull.underrun, "ring drained by the flush -> silence");
+        if grace.count_underrun(flushed, ring_level, pull.underrun) {
+            underruns += 1;
+        }
+        assert_eq!(underruns, 0, "the flush iteration is a deliberate discard");
+
+        // Reprime in flight: producer still decoding, ring stays empty.
+        for _ in 0..5 {
+            let flushed = service_flush(&mut c, &mut scratch, &req, &ack);
+            assert!(!flushed, "no new flush pending during the reprime");
+            let ring_level = c.slots();
+            let pull = pull_into(&mut c, &mut scratch);
+            assert!(pull.underrun);
+            if grace.count_underrun(flushed, ring_level, pull.underrun) {
+                underruns += 1;
+            }
+        }
+        assert_eq!(underruns, 0, "the reprime gap is suppressed while in grace");
+        assert!(grace.in_grace(), "still waiting for the reprime");
+
+        // Reprime lands: the producer refills past the low-water mark.
+        p.push_entire_slice(&[9, 9, 9, 9, 9, 9, 9, 9]).unwrap();
+        let flushed = service_flush(&mut c, &mut scratch, &req, &ack);
+        let ring_level = c.slots();
+        assert!(ring_level >= DEV_BUF, "a full device buffer is queued again");
+        let pull = pull_into(&mut c, &mut scratch);
+        assert!(!pull.underrun, "the pull now fills completely");
+        if grace.count_underrun(flushed, ring_level, pull.underrun) {
+            underruns += 1;
+        }
+        assert_eq!(underruns, 0);
+        assert!(!grace.in_grace(), "reprime landed -> grace exits, counting resumes");
+    }
+
+    #[test]
+    fn grace_does_not_suppress_mid_playback_underrun() {
+        // No flush ever happens. An empty ring during normal playback must count an
+        // underrun every iteration: grace must not over-suppress the perf path.
+        let (_p, mut c) = RingBuffer::<u8>::new(64);
+        let mut scratch = [0u8; DEV_BUF];
+        let mut grace = FlushGrace::new(DEV_BUF, 1000);
+        let mut underruns = 0u64;
+
+        for _ in 0..4 {
+            let ring_level = c.slots();
+            let pull = pull_into(&mut c, &mut scratch);
+            assert!(pull.underrun);
+            // flushed = false: steady-state starvation, never a deliberate gap.
+            if grace.count_underrun(false, ring_level, pull.underrun) {
+                underruns += 1;
+            }
+        }
+        assert_eq!(underruns, 4, "steady-state starvation is never masked");
+        assert!(!grace.in_grace());
+    }
+
+    #[test]
+    fn grace_safety_cap_surfaces_a_stalled_producer() {
+        // A flush arms grace, but the producer never reprimes. After the bounded cap
+        // of grace iterations, underruns surface again (grace is not unbounded).
+        let (_p, mut c) = RingBuffer::<u8>::new(64);
+        let req = AtomicU64::new(1);
+        let ack = AtomicU64::new(0);
+        let mut scratch = [0u8; DEV_BUF];
+        let cap = 3u32;
+        let mut grace = FlushGrace::new(DEV_BUF, cap);
+        let mut underruns = 0u64;
+
+        // Flush iteration arms grace.
+        let flushed = service_flush(&mut c, &mut scratch, &req, &ack);
+        assert!(flushed);
+        let ring_level = c.slots();
+        let pull = pull_into(&mut c, &mut scratch);
+        if grace.count_underrun(flushed, ring_level, pull.underrun) {
+            underruns += 1;
+        }
+
+        // Producer never reprimes: the ring stays empty forever.
+        for _ in 0..(cap as usize + 2) {
+            let ring_level = c.slots();
+            assert_eq!(ring_level, 0, "producer stalled: nothing reprimed");
+            let pull = pull_into(&mut c, &mut scratch);
+            if grace.count_underrun(false, ring_level, pull.underrun) {
+                underruns += 1;
+            }
+        }
+        // `cap` iterations are suppressed; the remaining 2 surface as underruns.
+        assert_eq!(underruns, 2, "a producer that never reprimes still surfaces underruns");
+        assert!(!grace.in_grace(), "grace lapsed once the safety cap elapsed");
     }
 
     #[test]
