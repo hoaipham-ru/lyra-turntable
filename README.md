@@ -198,7 +198,7 @@ then, those formats only play through the legacy foobar2000 backend.
 |---|---|
 | Badge is amber `✗` / "shared" | You are in Shared output mode, or the device rejected the file's rate in exclusive mode. Set mode = Exclusive or ASIO, and confirm the device accepts the rate (section 3.1) |
 | DAC doesn't change sample rate | You are in Shared mode. Switch to Exclusive or ASIO. On a laptop, also check which rates the built-in output accepts (section 7.2) |
-| Clicks or dropouts in exclusive mode | Make sure you run 1.0.0 or later (the DSD→PCM start-up underrun was fixed there). Otherwise try ASIO if your DAC has a driver |
+| Clicks or dropouts in exclusive mode | A short tick when a track starts, changes or is seeked is a known 1.0 issue (see [Known issues](#known-issues)). Ticks in the middle of a track are not expected: try ASIO if your DAC has a driver, and report it |
 | DSD plays as PCM | Your DAC has no DSD support, so Lyra uses DSD→PCM. For native DSD/DoP you need a DSD-capable DAC (section 7) |
 | Sound is "wider", louder or coloured | Windows *Audio enhancements* or *Spatial sound* (e.g. Dolby Atmos) is on. Turn both **Off** for the output device |
 | Lyra is missing from *Open with* | Launch Lyra once (it registers on first run). Lyra never makes itself the default app |
@@ -223,20 +223,24 @@ it matches, file by file — which it now does for FLAC and WAV against libFLAC.
 - **Native DSD over ASIO** and **DoP over WASAPI** are implemented and unit-tested, but their end-to-end hardware verification is **pending a DSD-capable DAC** — the dev laptop cannot output raw DSD. See the release notes for the full pending list.
 
 ### Known issues
-- **DSD→PCM start-up underrun (fix planned for 1.0.1):** on a device without DSD support (e.g. the laptop's built-in Senary codec), the first ~0.5 s of a DSD track can underrun 4–6 times as playback starts. This is start-up only — steady-state DSD→PCM is clean, and FLAC/WAV are unaffected.
+- **DSD→PCM start-up underrun (fix planned for 1.0.1):** on a device without DSD support (e.g. the laptop's built-in Senary codec), the first ~0.5 s of a DSD track can underrun 4–6 times as playback starts. This is start-up only — steady-state DSD→PCM is clean.
+- **Underruns on track change / seek (fix planned for 1.0.1, ADR-016):** when playback jumps — next/previous track, seek, a new queue — the output ring is flushed and refilled, and on the real device the refill can lag the device for a moment. The 30-minute real-device soak still counted **460 underruns over 823 transitions** (down from ~3,000 before the 1.0 fixes). Steady playback within a track is clean and the output stays bit-perfect; what you may hear is a short tick right at a jump.
 
 ### Status as of 2026-11-27
 
 **Done**
 - FLAC + WAV decode bit-identical to libFLAC across the 82-file corpus; bit-perfect to the WASAPI API boundary.
-- DSD (DSF/DFF) playback via DSD→PCM; DSD→PCM underruns fixed (perf check: FLAC 24/192 **0**, DSD64 **0** underruns; CPU 0.2 % / 1.4 %, ~14 MB RAM).
+- DSD (DSF/DFF) playback via DSD→PCM. Perf check on the real device: FLAC 24/192 **0** underruns, bit-perfect; CPU ~0.4 % (FLAC) / ~1.5 % (DSD), ~14 MB RAM.
 - Native backend is the default; one-time read-only import of foobar2000 playlists.
 - UI 0.4.1 fixes (English UI, working dropdowns, device volume knob, playlist select/reorder) pass component and browser tests (UI gate P8.3b).
-- No memory growth over 30 minutes of playback (0.04 MB/min).
+- 30-minute soak on the real device (823 track changes/seeks): no memory growth (0.05 MB/min).
+- Uninstall test (automated) passed; P8 release hygiene (version 1.0.0, third-party notices) done.
 
-**Still pending before 1.0 is certified**
-- 30-minute soak on the real device (the last attempt fell back to offline and is not counted).
-- UI tests in the real WebView2 window (needs tauri-driver + msedgedriver), final QA gate, uninstall test, final review.
+**Shipped with known issues (ADR-015, ADR-016)** — Hoai decided on 2026-11-27 to release 1.0.0 with the underrun issues above documented and to fix them properly in 1.0.1. The QA gate is therefore *not* a clean pass on underruns.
+
+**Still pending**
+- Underrun fixes (DSD start-up, track change / seek) — 1.0.1.
+- UI tests in the real WebView2 window (needs tauri-driver + msedgedriver).
 - Hardware checks that need equipment: loopback A/B vs foobar2000, CPU comparison vs foobar2000, ASIO on the Sony NW-A55 (Sony driver), native DSD / DoP on a DSD-capable DAC.
 
 The full list of known weaknesses lives in [`docs/BACKLOG-polish.md`](docs/BACKLOG-polish.md#known-weaknesses-as-of-041-2026-11-26).

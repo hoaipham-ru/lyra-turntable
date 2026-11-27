@@ -24,12 +24,18 @@ foobar2000**. foobar2000 remains only as an optional, hidden legacy backend.
   amber for a device-forced conversion. Also surfaces output underruns.
 - **Settings panel** (⚙): backend, output device, output mode (exclusive / shared /
   ASIO) and DSD routing (auto / DoP / native / PCM).
-- **Volume knob locked at 0 dB** in bit-perfect mode, with a tooltip explaining why; set
-  the level on the DAC or amplifier.
+- **Volume knob = device (endpoint) volume** through Windows; applied after Lyra hands over
+  the samples, so the stream stays bit-perfect.
+- **Playlist card**: click / Ctrl / Shift select, double-click or Enter to play, Delete to
+  remove, drag to reorder (Lyra backend).
+- **English UI** throughout (song titles shown as tagged), app-drawn dropdowns (native
+  `<select>` popups do not open in the transparent window).
 - **One-time, read-only import** of foobar2000 v2 playlists on first native startup, so
   returning users keep their lists. foobar2000 files are never modified.
-- Single string table (`src/strings.ts`) with parallel Vietnamese and English entries,
+- Single string table (`src/strings.ts`) with English (active) and Vietnamese entries,
   ready for a language toggle.
+- **Output ring re-priming** on device open, seek, track change and queue reload, plus
+  coalescing of back-to-back navigation (reduces underruns; see Known issues).
 
 ### Changed
 - **foobar2000 cutover (P8.4):** the native engine is the default and only path a fresh
@@ -63,7 +69,12 @@ foobar2000**. foobar2000 remains only as an optional, hidden legacy backend.
   development laptop's built-in Senary codec), starting a DSD track through the DSD→PCM
   path produces **4–6 output underruns during roughly the first 0.5 s** of the track.
   This affects **start-up only**: once playback is running, DSD→PCM is clean, and
-  **FLAC and WAV are not affected**. A fix is planned for **1.0.1**.
+  **FLAC and WAV are not affected** by this one. A fix is planned for **1.0.1**.
+- **Underruns on track change / seek (ADR-016).** Jumps (next/previous, seek, new queue)
+  flush and refill the output ring; on the real device the refill can lag for a moment.
+  30-minute real-device soak: **460 underruns over 823 transitions** (from ~3,000 before
+  the 1.0 fixes). Steady playback is clean and bit-perfect; a short tick can be heard at a
+  jump. Root-cause fix planned for **1.0.1**.
 
 ### Pending — hardware
 Built and unit-tested, but not yet verified on real hardware because the development

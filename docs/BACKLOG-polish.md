@@ -149,3 +149,6 @@ stale — the shipped binary links **no FFmpeg / LGPL** (confirmed via
 `cargo tree -e no-dev -p turntable`; `ffmpeg-next` is not a dependency of any shipped crate).
 Those ADRs are lyra-architect's files and were not edited here; see `THIRD-PARTY-NOTICES.md`
 for the same observation so the orchestrator can relay it.
+
+## Known issue shipped in 1.0 (ADR-016) - fix in 1.0.1
+- [ ] **Underruns on track change / seek / queue reload**: 30-min real-device soak = 460 underruns (1922 events) over 823 transitions after two fix rounds (from ~3,000). Ring is re-primed on open/seek/reload (cdef11a), navigation coalesced (4425dc4), post-flush grace window (a1b44a4) - still not zero. Hoai is researching a root-cause fix. Leads: keep the device running with the old tail while the new stream fills (crossfade-free double buffer), prime BEFORE flushing, larger cushion on transitions, measure fill time per transition, verify gapless natural transitions on the real device separately from user seeks, and report raw vs suppressed counts. [lyra-engine, lyra-output, lyra-qa]
