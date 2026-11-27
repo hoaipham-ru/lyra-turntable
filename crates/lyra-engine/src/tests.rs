@@ -1286,3 +1286,171 @@ fn open_primes_ring_to_cushion_before_first_drain() {
          first device drain, independent of Resume; only {got} frames were queued"
     );
 }
+
+// --- P8 startup/seek: the prime must reach the cushion against a DRAINING device ---
+
+/// A sink that models a real device draining *while the worker fills it*: each `push`
+/// queues the pushed frames **and** lets the device immediately consume up to
+/// `drain_per_push` of whatever is now queued, so `frames_played` advances as the ring
+/// fills. This is the race the open-time prime and the post-seek re-prime must beat.
+///
+/// Unlike `PrimeProbeSink` (which never drains, so even a prime that stops after merely
+/// *producing* a cushion looks "full"), this exposes the under-fill the real device hit
+/// (P8): a produced-count prime leaves `pushed - played` — the frames actually queued
+/// ahead of the device — below the cushion, because the device ate some while it filled.
+///
+/// `push` accepts every byte (unbounded ring) so there is no back-pressure backlog;
+/// `drain_per_push` is kept below the per-read output so the fill still outruns the
+/// drain and a cushion-targeting prime converges.
+struct DrainOnPushSink {
+    spec: StreamSpec,
+    bpf: usize,
+    drain_per_push: u64,
+    pushed: Arc<AtomicU64>,
+    played: Arc<AtomicU64>,
+}
+
+impl AudioSink for DrainOnPushSink {
+    fn negotiated(&self) -> StreamSpec {
+        self.spec
+    }
+    fn is_bit_perfect(&self) -> bool {
+        false // DSD→PCM is a processed path
+    }
+    fn push(&mut self, bytes: &[u8]) -> usize {
+        let frames = (bytes.len() / self.bpf) as u64;
+        let pushed = self.pushed.fetch_add(frames, Ordering::Relaxed) + frames;
+        // The device consumes up to `drain_per_push` of whatever is now queued.
+        let queued = pushed.saturating_sub(self.played.load(Ordering::Relaxed));
+        self.played.fetch_add(self.drain_per_push.min(queued), Ordering::Relaxed);
+        frames as usize * self.bpf
+    }
+    fn flush(&mut self) {
+        // The ring empties; nothing stale remains. `frames_played` does not rewind.
+        self.pushed.store(self.played.load(Ordering::Relaxed), Ordering::Relaxed);
+    }
+    fn frames_played(&self) -> u64 {
+        self.played.load(Ordering::Relaxed)
+    }
+    fn underruns(&self) -> u64 {
+        0
+    }
+    fn device_lost(&self) -> bool {
+        false
+    }
+}
+
+/// Frames the device drains per `push` in the draining-prime tests. Below
+/// `CHUNK_FRAMES` (64) so the fill outruns the drain and a cushion-targeting prime
+/// converges, yet large enough that a produced-count prime visibly under-fills.
+const DRAIN_PER_PUSH: u64 = 32;
+
+/// Spawn a bare worker over [`SmallChunkSource`] and a [`DrainOnPushSink`], returning
+/// the command sender, the join handle, and the shared pushed/played counters.
+fn draining_prime_worker() -> (
+    crossbeam_channel::Sender<crate::worker::WorkerCmd>,
+    std::thread::JoinHandle<()>,
+    Arc<AtomicU64>,
+    Arc<AtomicU64>,
+) {
+    use crate::worker::{self, WorkerEvt};
+
+    let pushed = Arc::new(AtomicU64::new(0));
+    let played = Arc::new(AtomicU64::new(0));
+    let pushed_c = pushed.clone();
+    let played_c = played.clone();
+    let sink: crate::sink::SinkFactory = Box::new(move |spec: &StreamSpec| {
+        let bpf = match spec {
+            StreamSpec::Pcm(p) => p.bytes_per_frame(),
+            StreamSpec::Dsd(_) => return Err(LyraError::Device("DSD sink unsupported".into())),
+        };
+        Ok(Box::new(DrainOnPushSink {
+            spec: *spec,
+            bpf,
+            drain_per_push: DRAIN_PER_PUSH,
+            pushed: pushed_c.clone(),
+            played: played_c.clone(),
+        }) as Box<dyn AudioSink>)
+    });
+    let source: Box<dyn Source> = Box::new(SmallChunkSource);
+
+    let (wevt_tx, _wevt_rx) = crossbeam_channel::unbounded::<WorkerEvt>();
+    let (wcmd_tx, wcmd_rx) = crossbeam_channel::unbounded();
+    let join = std::thread::Builder::new()
+        .name("draining-prime-worker".into())
+        .spawn(move || worker::run(wevt_tx, wcmd_rx, sink, source, TEST_PREROLL))
+        .unwrap();
+    (wcmd_tx, join, pushed, played)
+}
+
+/// The cushion (frames) the prime must hold ahead of the device at the DSD→PCM rate.
+fn dsd_cushion_frames() -> u64 {
+    DSD_PCM_SPEC.rate as u64 * 250 / 1000
+}
+
+/// P8 startup regression (draining device): opening a processed DSD→PCM track must
+/// prime the ring so it holds a **full cushion ahead of a device that is already
+/// draining**, not merely produce a cushion's worth of frames.
+///
+/// `Load` then `Shutdown` are sent back-to-back, so the worker drains the `Shutdown`
+/// via `try_recv` the instant `load` (prime included) returns and exits BEFORE any
+/// pump tick: the ring state read afterwards is the prime's result alone. The old
+/// produced-count prime (`produced >= target`) stops after emitting one cushion of
+/// frames, by which point the device has eaten part of it, leaving `pushed - played`
+/// below the cushion — this assertion fails on that code and passes once the prime
+/// loops on `buffered_ahead`.
+#[test]
+fn open_primes_ring_to_cushion_against_a_draining_device() {
+    use crate::worker::WorkerCmd;
+
+    let (wcmd_tx, join, pushed, played) = draining_prime_worker();
+    wcmd_tx.send(WorkerCmd::Load(tref("beethoven.dff", None))).unwrap();
+    wcmd_tx.send(WorkerCmd::Shutdown).unwrap();
+    join.join().unwrap();
+
+    let cushion = dsd_cushion_frames();
+    let buffered = pushed.load(Ordering::Relaxed).saturating_sub(played.load(Ordering::Relaxed));
+    assert!(
+        buffered >= cushion,
+        "open must prime the ring to a full cushion AHEAD OF a draining device \
+         ({cushion} frames); only {buffered} were queued ahead — a produced-count prime \
+         under-fills because the device drains while it fills"
+    );
+}
+
+/// P8 seek regression (draining device): a seek while playing flushes the pre-seek
+/// tail (B1) and must then re-prime the emptied ring to the cushion, so the running
+/// device does not drain into the post-flush gap (the soak's per-seek underruns).
+///
+/// After the ring is primed and playing, `Seek` then `Shutdown` are sent back-to-back:
+/// the worker handles the seek (flush + re-prime) and exits via `try_recv(Shutdown)`
+/// BEFORE the next pump, so the ring state read afterwards is the seek re-prime's
+/// result alone. Without the re-prime the flush leaves `pushed == played` (buffered 0),
+/// so this assertion fails; with it the ring again holds a cushion.
+#[test]
+fn seek_reprimes_ring_to_cushion_against_a_draining_device() {
+    use crate::worker::WorkerCmd;
+
+    let (wcmd_tx, join, pushed, played) = draining_prime_worker();
+    wcmd_tx.send(WorkerCmd::Load(tref("beethoven.dff", None))).unwrap();
+    wcmd_tx.send(WorkerCmd::Resume).unwrap();
+
+    let cushion = dsd_cushion_frames();
+    let buffered = || pushed.load(Ordering::Relaxed).saturating_sub(played.load(Ordering::Relaxed));
+    assert!(
+        wait_until(Duration::from_secs(2), || buffered() >= cushion),
+        "the open prime should fill the ring before the seek"
+    );
+
+    wcmd_tx.send(WorkerCmd::Seek(1_000_000)).unwrap();
+    wcmd_tx.send(WorkerCmd::Shutdown).unwrap();
+    join.join().unwrap();
+
+    let after = buffered();
+    assert!(
+        after >= cushion,
+        "a seek while playing must re-prime the flushed ring to the cushion \
+         ({cushion} frames); only {after} were queued ahead after the seek — the device \
+         would drain into the empty ring the flush left (P8 per-seek underruns)"
+    );
+}
