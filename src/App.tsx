@@ -38,14 +38,16 @@ type Backend = "foobar" | "native";
 const SETTINGS_KEY = "tt.settings"; // localStorage mirror of the Rust settings file
 // Synchronous first guess for the initial render (before the async `settings_get`
 // confirms it). Outside Tauri there is no Rust side, so this is the only source.
+// P8.4 cutover: native is the default. We come up on native unless the user has
+// explicitly saved the legacy foobar2000 backend.
 const readBackendSync = (): Backend => {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
-    if (raw && JSON.parse(raw).backend === "native") return "native";
+    if (raw && JSON.parse(raw).backend === "foobar") return "foobar";
   } catch {
     /* storage unavailable */
   }
-  return "foobar";
+  return "native";
 };
 
 // The Default-Playlist startup pass resolves this with the Default playlist id;
@@ -102,7 +104,7 @@ export default function App() {
   useEffect(() => {
     if (!inTauri) return;
     void invoke<{ backend?: string }>("settings_get")
-      .then((s) => setBackend(s?.backend === "native" ? "native" : "foobar"))
+      .then((s) => setBackend(s?.backend === "foobar" ? "foobar" : "native"))
       .catch(() => {});
   }, []);
 

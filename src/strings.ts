@@ -15,10 +15,13 @@ const vi = {
 
   // "Bộ máy phát" = Player backend.
   backendLabel: "Bộ máy phát",
-  backendFoobar: "foobar2000 (cũ)", // legacy path
-  backendNative: "Lyra (bit-perfect)", // the new native engine
-  // "Lyra là bộ máy bit-perfect mới; foobar2000 là đường cũ (mặc định tới P8)."
-  backendHint: "Lyra là bộ máy bit-perfect mới; foobar2000 là đường cũ, mặc định cho tới P8.",
+  backendFoobar: "foobar2000 (cần cài foobar2000)", // legacy path, requires foobar2000
+  backendNative: "Lyra (bit-perfect)", // the new native engine, default
+  // Lyra is the standalone default; foobar2000 is a legacy fallback.
+  backendHint: "Lyra là bộ máy bit-perfect mặc định; không cần foobar2000.",
+  // "Nâng cao / cũ" = Advanced / Legacy.
+  backendLegacyLabel: "Nâng cao / cũ",
+  backendLegacyHint: "Chỉ dùng foobar2000 nếu bạn thực sự cần đường cũ; cần cài sẵn foobar2000.",
 
   // "Thiết bị ra" = Output device.
   deviceLabel: "Thiết bị ra",
@@ -68,9 +71,11 @@ const en: typeof vi = {
   close: "Close",
 
   backendLabel: "Player backend",
-  backendFoobar: "foobar2000 (legacy)",
+  backendFoobar: "foobar2000 (requires foobar2000)",
   backendNative: "Lyra (bit-perfect)",
-  backendHint: "Lyra is the new bit-perfect engine; foobar2000 is the legacy path, default until P8.",
+  backendHint: "Lyra is the bit-perfect engine and the default; foobar2000 is not required.",
+  backendLegacyLabel: "Advanced / Legacy",
+  backendLegacyHint: "Use foobar2000 only if you specifically need the legacy path; it requires foobar2000 to be installed.",
 
   deviceLabel: "Output device",
   deviceSystemDefault: "System default",

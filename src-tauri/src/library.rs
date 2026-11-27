@@ -122,6 +122,53 @@ fn track_dto(item: &TrackRef) -> TrackDto {
     TrackDto { title, artist, album, length, key: path }
 }
 
+/// One-time import of foobar2000 v2 playlists into the native library (P8.4).
+///
+/// Runs on first native startup. If a foobar2000 v2 profile exists under
+/// `%APPDATA%\foobar2000-v2\playlists-v2.0\`, its playlists are imported once,
+/// then a persisted guard (`AppSettings::foobar_migrated`) is set so it never
+/// re-runs and never clobbers playlists the user has since edited. The foobar2000
+/// profile is only ever read (never written — RUNBOOK forbidden). If no profile
+/// exists this is a no-op and the guard stays unset, so a later foobar2000 install
+/// can still be imported once. Any failure is swallowed so startup is never blocked.
+pub fn migrate_foobar_once(app: &AppHandle) {
+    if crate::settings::load(app).foobar_migrated {
+        return; // already done: never re-run, never clobber user playlists
+    }
+    let Some(appdata) = std::env::var_os("APPDATA") else {
+        return; // no %APPDATA%: nothing to migrate from
+    };
+    let profile = Path::new(&appdata).join("foobar2000-v2");
+    if !profile.join("playlists-v2.0").join("index.txt").exists() {
+        return; // foobar2000 v2 not installed / no playlists: no-op, leave guard unset
+    }
+
+    let state = app.state::<LibraryState>();
+    let outcome = with_store(app, &state, |store| {
+        store.migrate_foobar_playlists(&profile).map_err(|e| e.to_string())
+    });
+    match outcome {
+        Ok(report) => {
+            for (title, result) in &report {
+                match result {
+                    Ok(s) => eprintln!("foobar migrate: {title:?} — {} imported, {} skipped", s.imported, s.skipped),
+                    Err(e) => eprintln!("foobar migrate: {title:?} — skipped ({e})"),
+                }
+            }
+            // Mark done even if individual playlists failed: we attempted the
+            // migration against a real profile, so it must not run again.
+            let mut settings = crate::settings::load(app);
+            settings.foobar_migrated = true;
+            if let Err(e) = crate::settings::persist(app, &settings) {
+                eprintln!("foobar migrate: could not persist guard ({e}); may retry next start");
+            }
+        }
+        // Could not even read the index: leave the guard unset so a transient
+        // failure (e.g. a locked profile) can retry on a later start.
+        Err(e) => eprintln!("foobar migrate: aborted ({e}); will retry next start"),
+    }
+}
+
 /// List all playlists with their item counts.
 #[tauri::command]
 pub fn playlists_list(app: AppHandle, state: State<'_, LibraryState>) -> Result<Vec<PlaylistDto>, String> {

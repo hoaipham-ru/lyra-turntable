@@ -258,15 +258,31 @@ pub fn run() {
         ])
         .setup(|app| {
             thread::spawn(register_open_with);
-            // Open-with registration is backend-agnostic (it just launches Lyra), but
-            // foobar2000 itself must NOT be started when the native engine is selected
-            // (P4.5): the native backend owns playback and two players never sound at once.
+            // Open-with registration is backend-agnostic (it just launches Lyra). The
+            // native engine is the default and only path a fresh user ever lands on
+            // (P8.4): Lyra never starts or requires foobar2000. foobar2000 is launched
+            // ONLY when the hidden legacy backend is explicitly selected AND it is
+            // actually installed — never on the default/native path, and never two
+            // players at once.
             let native = settings::load(app.handle()).backend == "native";
-            if !native && !foobar_running() {
-                if let Ok(child) = Command::new(FOOBAR).arg("/hide").creation_flags(CREATE_NO_WINDOW).spawn() {
-                    STARTED_BY_APP.store(true, Ordering::SeqCst);
-                    FOOBAR_PID.store(child.id(), Ordering::SeqCst);
-                    keep_hidden(8000); // its window appears a moment after launch
+            if native {
+                // First native startup: one-time, read-only import of foobar2000 v2
+                // playlists if that profile happens to exist. Off the startup thread so
+                // a slow or failed migration can never block the window from opening.
+                let handle = app.handle().clone();
+                thread::spawn(move || library::migrate_foobar_once(&handle));
+            } else if !foobar_running() {
+                // Legacy backend selected. Only launch foobar2000 if it is installed;
+                // if not, fail gracefully (do not crash, do not silently launch) — the
+                // UI's foobar backend will simply stay disconnected.
+                if Path::new(FOOBAR).exists() {
+                    if let Ok(child) = Command::new(FOOBAR).arg("/hide").creation_flags(CREATE_NO_WINDOW).spawn() {
+                        STARTED_BY_APP.store(true, Ordering::SeqCst);
+                        FOOBAR_PID.store(child.id(), Ordering::SeqCst);
+                        keep_hidden(8000); // its window appears a moment after launch
+                    }
+                } else {
+                    eprintln!("legacy foobar2000 backend selected but foobar2000 is not installed at {FOOBAR}; staying on the native-capable shell");
                 }
             }
 
@@ -287,7 +303,7 @@ pub fn run() {
 
             TrayIconBuilder::with_id("tray")
                 .icon(app.default_window_icon().cloned().expect("window icon"))
-                .tooltip("Lyra · foobar2000")
+                .tooltip("Lyra Turntable")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, e| match e.id.as_ref() {
