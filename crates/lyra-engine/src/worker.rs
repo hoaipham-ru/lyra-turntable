@@ -34,8 +34,27 @@ use crate::source::{Delivery, Opened, Resolved, SourceBox};
 const TICK: Duration = Duration::from_millis(5);
 /// Minimum spacing between periodic position reports (~10×/second).
 const POSITION_INTERVAL: Duration = Duration::from_millis(100);
-/// Upper bound on decode chunks produced per wake, to keep the loop responsive.
-const MAX_CHUNKS_PER_TICK: usize = 8;
+/// Depth of audio the pump keeps buffered **ahead of the device**, as a wall-clock
+/// duration of device output.
+///
+/// Each wake the pump tops the ring up to this cushion rather than stopping after a
+/// fixed number of decode chunks. The cushion is sized so that neither the heavier
+/// first fill on the DSD→PCM path (a whole-chunk FIR before any frames exist) nor a
+/// transient converter-cost spike can drain the ring between 5 ms ticks: at
+/// 176.4 kHz the device eats ~882 frames per tick, and 250 ms is ~44 100 frames of
+/// slack. It stays well under `lyra_output`'s ~2 s ring, so production is bounded
+/// and never fights back-pressure for the common case.
+///
+/// Replacing the old fixed 8-chunk cap matters for DSD→PCM because one decode read
+/// yields 16× fewer output frames after decimation; a fixed small chunk budget
+/// could produce fewer frames per tick than the device consumes and starve the ring
+/// periodically. A frame-depth target keeps the feed rate matched to the device
+/// regardless of the per-chunk output size.
+const FILL_TARGET: Duration = Duration::from_millis(250);
+/// Hard safety cap on produce iterations per wake. The real bound on per-tick work
+/// is [`FILL_TARGET`] worth of frames; this only guards against a pathological
+/// zero-output read loop (far above the chunk count any real fill needs).
+const MAX_PRODUCE_ITERS_PER_TICK: usize = 4096;
 
 /// A request from the control thread to the worker.
 pub(crate) enum WorkerCmd {
@@ -510,8 +529,16 @@ impl Worker {
 
     // --- Pumping -----------------------------------------------------------
 
-    /// Fill the ring with up to [`MAX_CHUNKS_PER_TICK`] chunks, crossing gapless
-    /// joins in the same pass so no silence is inserted.
+    /// Top the ring up to the [`FILL_TARGET`] cushion ahead of the device, crossing
+    /// gapless joins in the same pass so no silence is inserted.
+    ///
+    /// The amount produced per wake is governed by how far the ring has fallen below
+    /// the cushion, not by a fixed chunk count, so the feed rate stays matched to the
+    /// device however many output frames one decode read yields (the DSD→PCM path
+    /// yields 16× fewer frames per read after decimation). Per-wake work stays
+    /// bounded: production stops once the cushion is reached, once a tick's worth of
+    /// frames has been produced (so an instantly-draining offline sink cannot run
+    /// away), or at [`MAX_PRODUCE_ITERS_PER_TICK`].
     fn pump(&mut self) {
         if self.sink.is_none() || self.respec.is_some() {
             return;
@@ -519,7 +546,9 @@ impl Worker {
         if !self.flush_pending() {
             return;
         }
-        for _ in 0..MAX_CHUNKS_PER_TICK {
+        let target = self.fill_target_frames();
+        let mut produced: u64 = 0;
+        for _ in 0..MAX_PRODUCE_ITERS_PER_TICK {
             if !self.playing || self.decoder.is_none() {
                 return;
             }
@@ -528,6 +557,14 @@ impl Worker {
                     return; // end of queue (drain to TrackEnded) or spec change
                 }
                 continue; // new segment installed: produce it
+            }
+            // Stop once the ring holds a full cushion ahead of the device, or once
+            // this wake has produced a tick's worth of frames. `buffered_ahead`
+            // bounds steady-state work to ~one chunk; `produced` bounds the fill on a
+            // sink that drains instantly (offline/QA), where the cushion is never
+            // "reached" because every pushed frame is consumed at once.
+            if self.buffered_ahead() >= target || produced >= target {
+                return;
             }
             // Source bytes: the carry from a crossed virtual-track boundary first,
             // then the decoder.
@@ -550,11 +587,28 @@ impl Worker {
                     continue;
                 }
             }
+            let before = self.ring_end_dev;
             self.produce_into_pending();
+            produced += self.ring_end_dev.saturating_sub(before);
             if !self.flush_pending() {
                 break; // ring filled; carry the remainder next tick
             }
         }
+    }
+
+    /// The [`FILL_TARGET`] cushion expressed in device frames for the current output
+    /// format (at least one frame, so the pump always makes progress while playing).
+    fn fill_target_frames(&self) -> u64 {
+        let rate = self.dev_pcm.map_or(0, |p| u64::from(p.rate));
+        ((rate * FILL_TARGET.as_millis() as u64) / 1000).max(1)
+    }
+
+    /// Device frames currently queued ahead of the device: everything produced into
+    /// the ring (and the worker's own un-pushed `pending`) that the device has not
+    /// yet consumed. Derived from `frames_played`, so it reflects real draining.
+    fn buffered_ahead(&self) -> u64 {
+        let played = self.sink.as_ref().map_or(0, |s| s.frames_played());
+        self.ring_end_dev.saturating_sub(played)
     }
 
     /// Convert `in_buf` (source bytes) to device bytes in `pending`, truncating at a

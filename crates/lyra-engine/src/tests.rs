@@ -10,7 +10,7 @@
 //! the gapless join can be proven byte-for-byte without hardware.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -979,6 +979,211 @@ fn stop_and_set_queue_flush_but_pause_does_not() {
     assert!(
         wait_until(Duration::from_secs(1), || flush_count.load(Ordering::Relaxed) > after_stop),
         "set-queue while playing must flush"
+    );
+
+    engine.shutdown();
+}
+
+// --- DSD→PCM feed rate (P8): the ring must never starve ----------------------
+
+/// The device format the DSD→PCM path produces: 176.4 kHz, 24-bit, stereo.
+const DSD_PCM_SPEC: PcmSpec =
+    PcmSpec { rate: 176_400, channels: 2, bits_valid: 24, format: SampleFormat::S24 };
+
+/// Output frames one decode read yields. Deliberately small to model the DSD→PCM
+/// decimation: a DSD read feeds the FIR, which emits 16× fewer PCM frames, so one
+/// "chunk" is tens of frames, not thousands. The *old* pump produced at most 8 such
+/// chunks per 5 ms wake (`8 * 64` = 512 frames), fewer than the ~882 frames a
+/// 176.4 kHz device drains per tick, so the ring starved periodically — the bug this
+/// test pins. The fill-to-cushion pump matches the device's drain rate regardless of
+/// per-read output size.
+///
+/// The decode/convert *cost* is modelled as negligible on purpose: the engine bug is
+/// the feed-rate policy (how much the pump queues per wake), not converter CPU
+/// throughput. The real FIR's throughput is a separate, release-measured concern
+/// owned by `lyra-dsd` (and would make a debug unit test machine-dependent), so this
+/// test exercises the pump policy with a cheap delivery that emits the same small
+/// per-read output the decimation produces.
+const CHUNK_FRAMES: u64 = 64;
+
+/// An endless reader that emits `CHUNK_FRAMES` device-ready PCM frames per `read`,
+/// modelling the small per-read output of the DSD→PCM decimation.
+struct SmallChunkDecoder {
+    spec: PcmSpec,
+    tags: TagMap,
+}
+
+impl Decoder for SmallChunkDecoder {
+    fn spec(&self) -> StreamSpec {
+        StreamSpec::Pcm(self.spec)
+    }
+    fn total_frames(&self) -> Option<u64> {
+        None // endless, so the real-time drain always has more to consume
+    }
+    fn seek(&mut self, frame: u64) -> Result<u64> {
+        Ok(frame)
+    }
+    fn read(&mut self, out: &mut Vec<u8>) -> Result<usize> {
+        let bytes = CHUNK_FRAMES as usize * self.spec.bytes_per_frame();
+        out.resize(out.len() + bytes, 0);
+        Ok(CHUNK_FRAMES as usize)
+    }
+    fn tags(&self) -> &TagMap {
+        &self.tags
+    }
+}
+
+/// A fake [`Source`] for a single processed (DSD→PCM-style) track whose decoder
+/// yields the small per-read output the decimation produces.
+struct SmallChunkSource;
+
+impl Source for SmallChunkSource {
+    fn resolve(&mut self, track: &TrackRef) -> Result<Resolved> {
+        let source_spec = StreamSpec::Pcm(DSD_PCM_SPEC);
+        let info = TrackInfo {
+            track: track.clone(),
+            title: None,
+            artist: None,
+            album: None,
+            duration_frames: None,
+            spec: source_spec,
+        };
+        Ok(Resolved {
+            image_key: track.path.clone(),
+            virtual_start: 0,
+            virtual_end: None,
+            source_spec,
+            device_spec: source_spec,
+            processed: true, // the DSD→PCM path is not device-bit-perfect (ADR-004)
+            info,
+        })
+    }
+
+    fn open(&mut self, _track: &TrackRef, _resolved: &Resolved) -> Result<Opened> {
+        let decoder = Box::new(SmallChunkDecoder { spec: DSD_PCM_SPEC, tags: TagMap::new() });
+        Ok(Opened { decoder, delivery: Delivery::Pcm, produced_pcm: Some(DSD_PCM_SPEC) })
+    }
+}
+
+/// Startup grace: underruns before this are the unavoidable prefill transient owned
+/// by `lyra_output`'s device prefill, not the steady feed-rate property under test.
+const RT_GRACE: Duration = Duration::from_millis(200);
+/// Ring depth, matching `lyra_output`'s ~2 s decode-side ring.
+const RT_RING_SECS: u64 = 2;
+
+/// A sink that models a real device: a bounded ring drained at the sample rate by
+/// wall clock, with back-pressure on `push`, that **counts an underrun** each time a
+/// drain finds the ring empty (the device wanted more frames than were pushed) after
+/// the startup grace. This is the real-time-equivalent drain the P8 soak gate cares
+/// about; the existing `MockSink` never counts underruns.
+struct RtDrainSink {
+    spec: StreamSpec,
+    bpf: usize,
+    rate: u64,
+    ring_frames: u64,
+    start: Instant,
+    pushed: Arc<AtomicU64>,
+    underruns: Arc<AtomicU64>,
+    starved: Arc<AtomicBool>,
+}
+
+impl RtDrainSink {
+    /// Frames the device has tried to consume by now (real-time clock).
+    fn wanted(&self) -> u64 {
+        (self.start.elapsed().as_secs_f64() * self.rate as f64) as u64
+    }
+    /// Frames actually played (== wanted, capped by what has been pushed), counting a
+    /// fresh underrun episode whenever the device out-runs the pushed audio.
+    fn played_now(&self) -> u64 {
+        let wanted = self.wanted();
+        let pushed = self.pushed.load(Ordering::Relaxed);
+        if self.start.elapsed() > RT_GRACE {
+            if wanted > pushed {
+                if !self.starved.swap(true, Ordering::Relaxed) {
+                    self.underruns.fetch_add(1, Ordering::Relaxed);
+                }
+            } else {
+                self.starved.store(false, Ordering::Relaxed);
+            }
+        }
+        wanted.min(pushed)
+    }
+}
+
+impl AudioSink for RtDrainSink {
+    fn negotiated(&self) -> StreamSpec {
+        self.spec
+    }
+    fn is_bit_perfect(&self) -> bool {
+        false // DSD→PCM is a processed path
+    }
+    fn push(&mut self, bytes: &[u8]) -> usize {
+        let played = self.played_now();
+        let pushed = self.pushed.load(Ordering::Relaxed);
+        let in_ring = pushed.saturating_sub(played);
+        let space = self.ring_frames.saturating_sub(in_ring);
+        let offered = (bytes.len() / self.bpf) as u64;
+        let accept = offered.min(space);
+        self.pushed.fetch_add(accept, Ordering::Relaxed);
+        accept as usize * self.bpf
+    }
+    fn flush(&mut self) {
+        self.pushed.store(self.played_now(), Ordering::Relaxed);
+    }
+    fn frames_played(&self) -> u64 {
+        self.played_now()
+    }
+    fn underruns(&self) -> u64 {
+        self.underruns.load(Ordering::Relaxed)
+    }
+    fn device_lost(&self) -> bool {
+        false
+    }
+}
+
+/// P8 regression: the DSD→PCM feed keeps the ring above empty at a real-time drain.
+///
+/// A processed 176.4 kHz track whose decoder emits only 64 frames per read (the
+/// small output the 16× DSD→PCM decimation produces) is fed to a sink draining at the
+/// sample rate. The previous fixed 8-chunk-per-tick pump produced ~512 frames per
+/// 5 ms wake — fewer than the ~882 the device drains — and the ring starved. The
+/// fill-to-cushion pump tops the ring up to a frame-depth target each wake, so the
+/// feed keeps pace and no underrun is counted after the startup grace. (Before the
+/// fix this counts non-zero underruns and fails.)
+#[test]
+fn dsd_to_pcm_feed_never_starves_the_ring() {
+    let source: Box<dyn Source> = Box::new(SmallChunkSource);
+
+    let underruns = Arc::new(AtomicU64::new(0));
+    let underruns_c = underruns.clone();
+    let sink = Box::new(move |spec: &StreamSpec| -> Result<Box<dyn AudioSink>> {
+        let (bpf, rate) = match spec {
+            StreamSpec::Pcm(p) => (p.bytes_per_frame(), u64::from(p.rate)),
+            StreamSpec::Dsd(_) => return Err(LyraError::Device("DSD sink unsupported".into())),
+        };
+        Ok(Box::new(RtDrainSink {
+            spec: *spec,
+            bpf,
+            rate,
+            ring_frames: rate * RT_RING_SECS,
+            start: Instant::now(),
+            pushed: Arc::new(AtomicU64::new(0)),
+            underruns: underruns_c.clone(),
+            starved: Arc::new(AtomicBool::new(false)),
+        }))
+    });
+
+    let (engine, rx) = Engine::with_factories(source, sink, TEST_PREROLL);
+    engine.send(queue(&["beethoven.dff"]));
+    engine.send(EngineCommand::Play);
+
+    // Play well past the startup grace at real time, draining events meanwhile.
+    collect_until(&rx, Duration::from_millis(900), |_| false);
+
+    assert_eq!(
+        underruns.load(Ordering::Relaxed),
+        0,
+        "DSD→PCM feed must keep the ring fed at real-time drain (0 underruns)"
     );
 
     engine.shutdown();
