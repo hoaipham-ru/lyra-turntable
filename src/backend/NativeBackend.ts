@@ -182,16 +182,19 @@ export function useNativeBackend(): PlayerBackend {
     }
   }, []);
 
-  // Load `id`'s paths into the engine queue (once per owner change) and play `i`.
+  // Load `id`'s paths into the engine queue and play `i`.
   const play = useCallback(
     async (id: string, i: number) => {
       const paths = await pathsOf(id);
       if (!paths.length) return;
-      if (queueOwner.current !== id) {
-        queueOwner.current = id;
-        queuePaths.current = paths;
-        send({ type: "setQueue", paths });
-      }
+      // Always (re)load the queue before PlayAt. The engine can be restarted behind
+      // our back — e.g. switching to the foobar2000 backend shuts it down — and then
+      // its queue is empty while our cached owner still matched, giving
+      // "PlayAt(i) out of range" (2026-11-27). PlayAt starts a new track anyway, so
+      // re-sending the queue costs nothing audible.
+      queueOwner.current = id;
+      queuePaths.current = paths;
+      send({ type: "setQueue", paths });
       setPlayingPl(id);
       setPlayingIdx(i);
       send({ type: "playAt", index: i });
