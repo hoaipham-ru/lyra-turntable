@@ -1308,6 +1308,9 @@ struct DrainOnPushSink {
     drain_per_push: u64,
     pushed: Arc<AtomicU64>,
     played: Arc<AtomicU64>,
+    /// Count of `flush` calls, so a test can prove how many flush+reprime cycles a
+    /// batch of navigation commands triggered (coalescing drives it to one).
+    flushes: Arc<AtomicU64>,
 }
 
 impl AudioSink for DrainOnPushSink {
@@ -1326,6 +1329,7 @@ impl AudioSink for DrainOnPushSink {
         frames as usize * self.bpf
     }
     fn flush(&mut self) {
+        self.flushes.fetch_add(1, Ordering::Relaxed);
         // The ring empties; nothing stale remains. `frames_played` does not rewind.
         self.pushed.store(self.played.load(Ordering::Relaxed), Ordering::Relaxed);
     }
@@ -1352,13 +1356,16 @@ fn draining_prime_worker() -> (
     std::thread::JoinHandle<()>,
     Arc<AtomicU64>,
     Arc<AtomicU64>,
+    Arc<AtomicU64>,
 ) {
     use crate::worker::{self, WorkerEvt};
 
     let pushed = Arc::new(AtomicU64::new(0));
     let played = Arc::new(AtomicU64::new(0));
+    let flushes = Arc::new(AtomicU64::new(0));
     let pushed_c = pushed.clone();
     let played_c = played.clone();
+    let flushes_c = flushes.clone();
     let sink: crate::sink::SinkFactory = Box::new(move |spec: &StreamSpec| {
         let bpf = match spec {
             StreamSpec::Pcm(p) => p.bytes_per_frame(),
@@ -1370,6 +1377,7 @@ fn draining_prime_worker() -> (
             drain_per_push: DRAIN_PER_PUSH,
             pushed: pushed_c.clone(),
             played: played_c.clone(),
+            flushes: flushes_c.clone(),
         }) as Box<dyn AudioSink>)
     });
     let source: Box<dyn Source> = Box::new(SmallChunkSource);
@@ -1380,7 +1388,7 @@ fn draining_prime_worker() -> (
         .name("draining-prime-worker".into())
         .spawn(move || worker::run(wevt_tx, wcmd_rx, sink, source, TEST_PREROLL))
         .unwrap();
-    (wcmd_tx, join, pushed, played)
+    (wcmd_tx, join, pushed, played, flushes)
 }
 
 /// The cushion (frames) the prime must hold ahead of the device at the DSD→PCM rate.
@@ -1403,7 +1411,7 @@ fn dsd_cushion_frames() -> u64 {
 fn open_primes_ring_to_cushion_against_a_draining_device() {
     use crate::worker::WorkerCmd;
 
-    let (wcmd_tx, join, pushed, played) = draining_prime_worker();
+    let (wcmd_tx, join, pushed, played, _flushes) = draining_prime_worker();
     wcmd_tx.send(WorkerCmd::Load(tref("beethoven.dff", None))).unwrap();
     wcmd_tx.send(WorkerCmd::Shutdown).unwrap();
     join.join().unwrap();
@@ -1431,7 +1439,7 @@ fn open_primes_ring_to_cushion_against_a_draining_device() {
 fn seek_reprimes_ring_to_cushion_against_a_draining_device() {
     use crate::worker::WorkerCmd;
 
-    let (wcmd_tx, join, pushed, played) = draining_prime_worker();
+    let (wcmd_tx, join, pushed, played, _flushes) = draining_prime_worker();
     wcmd_tx.send(WorkerCmd::Load(tref("beethoven.dff", None))).unwrap();
     wcmd_tx.send(WorkerCmd::Resume).unwrap();
 
@@ -1452,5 +1460,256 @@ fn seek_reprimes_ring_to_cushion_against_a_draining_device() {
         "a seek while playing must re-prime the flushed ring to the cushion \
          ({cushion} frames); only {after} were queued ahead after the seek — the device \
          would drain into the empty ring the flush left (P8 per-seek underruns)"
+    );
+}
+
+// --- P8 coalescing: back-to-back reloads flush + re-prime the ring once -------
+
+/// Coalescing logic (fix #1): a batch that arrived within one wake collapses to the
+/// user's last action, so redundant navigation never re-primes the ring twice.
+/// Driven directly against the pure [`coalesce`] so the reduction is proven without
+/// any thread-timing dependence.
+#[test]
+fn coalesce_keeps_only_the_latest_navigation() {
+    use crate::worker::{coalesce, WorkerCmd};
+
+    let loads = |batch: Vec<WorkerCmd>| -> Vec<String> {
+        coalesce(batch)
+            .into_iter()
+            .filter_map(|c| match c {
+                WorkerCmd::Load(t) => Some(t.path),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let seeks = |batch: Vec<WorkerCmd>| -> Vec<u64> {
+        coalesce(batch)
+            .into_iter()
+            .filter_map(|c| match c {
+                WorkerCmd::Seek(f) => Some(f),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+
+    // Two PlayAt sequences (Load + Resume + PreloadNext) in one wake: only the last
+    // Load survives, so the worker flushes + re-primes once.
+    assert_eq!(
+        loads(vec![
+            WorkerCmd::Load(tref("a", None)),
+            WorkerCmd::Resume,
+            WorkerCmd::PreloadNext(Some(tref("na", None))),
+            WorkerCmd::Load(tref("b", None)),
+            WorkerCmd::Resume,
+            WorkerCmd::PreloadNext(Some(tref("nb", None))),
+        ]),
+        vec!["b"],
+        "only the latest reload survives a double-PlayAt"
+    );
+
+    // A Seek before the superseding Load is dropped (its landed position is moot).
+    assert_eq!(
+        coalesce(vec![
+            WorkerCmd::Load(tref("a", None)),
+            WorkerCmd::Seek(123),
+            WorkerCmd::Load(tref("b", None)),
+        ])
+        .len(),
+        1,
+        "a Load + pre-Load Seek collapse to the final Load alone"
+    );
+    assert_eq!(
+        loads(vec![
+            WorkerCmd::Load(tref("a", None)),
+            WorkerCmd::Seek(123),
+            WorkerCmd::Load(tref("b", None)),
+        ]),
+        vec!["b"]
+    );
+
+    // A Seek that follows the surviving Load is kept — it targets that track.
+    assert_eq!(
+        coalesce(vec![WorkerCmd::Load(tref("a", None)), WorkerCmd::Seek(42)]).len(),
+        2,
+        "Load then in-track Seek both survive"
+    );
+    assert_eq!(loads(vec![WorkerCmd::Load(tref("a", None)), WorkerCmd::Seek(42)]), vec!["a"]);
+    assert_eq!(seeks(vec![WorkerCmd::Load(tref("a", None)), WorkerCmd::Seek(42)]), vec![42]);
+
+    // Among several Seeks, only the last lands.
+    assert_eq!(
+        seeks(vec![WorkerCmd::Seek(1), WorkerCmd::Seek(2), WorkerCmd::Seek(3)]),
+        vec![3],
+        "redundant seeks collapse to the latest target"
+    );
+
+    // Stop/Load supersession both ways; Stop is never silently lost when it is the
+    // final stream-determining command.
+    assert!(
+        matches!(coalesce(vec![WorkerCmd::Load(tref("a", None)), WorkerCmd::Stop]).as_slice(), [WorkerCmd::Stop]),
+        "a trailing Stop wins over an earlier Load"
+    );
+    assert!(
+        matches!(coalesce(vec![WorkerCmd::Stop, WorkerCmd::Load(tref("a", None))]).as_slice(), [WorkerCmd::Load(_)]),
+        "a trailing Load re-establishes the stream over an earlier Stop"
+    );
+
+    // Pause and Shutdown keep their semantics (never dropped).
+    let out = coalesce(vec![
+        WorkerCmd::Load(tref("a", None)),
+        WorkerCmd::Pause,
+        WorkerCmd::Shutdown,
+    ]);
+    assert!(out.iter().any(|c| matches!(c, WorkerCmd::Pause)), "Pause preserved");
+    assert!(out.iter().any(|c| matches!(c, WorkerCmd::Shutdown)), "Shutdown preserved");
+}
+
+/// P8 coalescing regression (draining device): two back-to-back reloads that land in
+/// one wake must flush + re-prime the ring **once**, and leave it holding a full
+/// cushion — not flush+reprime twice (which doubles the empty-ring window the soak's
+/// per-transition underruns come from).
+///
+/// The first `Load` opens the device (a fresh open does not flush). The second and
+/// third `Load`s (the soak's double-PlayAt) are sent with `Shutdown` so the ring
+/// state read after the join is the coalesced reprime's result. Before coalescing the
+/// worker handled each reload in turn — two flushes; after it, the flush count is at
+/// most one and the ring is full. (The pure `coalesce` test above pins the exact
+/// reduction; this pins the end-to-end flush+prime behaviour against a draining sink.)
+#[test]
+fn coalesced_reloads_flush_and_reprime_once() {
+    use crate::worker::WorkerCmd;
+
+    let (wcmd_tx, join, pushed, played, flushes) = draining_prime_worker();
+    let cushion = dsd_cushion_frames();
+    let buffered = || pushed.load(Ordering::Relaxed).saturating_sub(played.load(Ordering::Relaxed));
+
+    // Open + prime on the first track (fresh device → no flush yet).
+    wcmd_tx.send(WorkerCmd::Load(tref("a.dff", None))).unwrap();
+    wcmd_tx.send(WorkerCmd::Resume).unwrap();
+    assert!(
+        wait_until(Duration::from_secs(2), || buffered() >= cushion),
+        "the open prime should fill the ring before the reloads"
+    );
+    assert_eq!(flushes.load(Ordering::Relaxed), 0, "a fresh-device open does not flush");
+
+    // Two reloads within one wake, then Shutdown: coalescing applies only the last.
+    wcmd_tx.send(WorkerCmd::Load(tref("b.dff", None))).unwrap();
+    wcmd_tx.send(WorkerCmd::Load(tref("c.dff", None))).unwrap();
+    wcmd_tx.send(WorkerCmd::Shutdown).unwrap();
+    join.join().unwrap();
+
+    let flush_count = flushes.load(Ordering::Relaxed);
+    assert!(
+        flush_count <= 1,
+        "two coalesced reloads must flush + re-prime at most once (got {flush_count}); \
+         before coalescing each reload flushed, giving two"
+    );
+    let after = buffered();
+    assert!(
+        after >= cushion,
+        "the single coalesced reprime must refill the ring to a full cushion \
+         ({cushion} frames); only {after} were queued ahead"
+    );
+}
+
+// --- P8 end-of-track: a seek past EOF advances in one clean reprime ------------
+
+/// P8 end-of-track regression (fix #2): a seek past the true end of a non-final track
+/// clamps to its last frame, hits EOS, and must advance to the next track in a
+/// **single** flush + reprime — not leave the ring near-empty re-priming repeatedly
+/// or ping-pong EOS/advance.
+///
+/// Two finite same-spec tracks feed a draining sink; the next track is pre-armed. A
+/// `Seek` far past track 1's end (the soak seeks ~4e6 frames into ~1.15e6-frame
+/// tracks), then `Shutdown`, lets the worker drain settle. The worker must emit one
+/// `Advanced` to track 2, flush exactly once (the seek), and leave the ring holding a
+/// full cushion of the next track's audio.
+#[test]
+fn seek_past_eof_advances_to_next_track_in_one_reprime() {
+    use crate::worker::{self, WorkerCmd, WorkerEvt};
+
+    let len = 30_000u64; // > the 48 kHz cushion (12 000), so the open prime fills from t1
+    let mut table = HashMap::new();
+    table.insert(
+        tref("t1", None),
+        TrackSpec { image_key: "t1".into(), image_total: Some(len), virtual_start: 0, virtual_end: Some(len), spec: SPEC },
+    );
+    table.insert(
+        tref("t2", None),
+        TrackSpec { image_key: "t2".into(), image_total: Some(len), virtual_start: 0, virtual_end: Some(len), spec: SPEC },
+    );
+    let opens = Arc::new(AtomicUsize::new(0));
+    let source: Box<dyn Source> = Box::new(MockSource { table, default_total: None, opens });
+
+    let pushed = Arc::new(AtomicU64::new(0));
+    let played = Arc::new(AtomicU64::new(0));
+    let flushes = Arc::new(AtomicU64::new(0));
+    let pushed_c = pushed.clone();
+    let played_c = played.clone();
+    let flushes_c = flushes.clone();
+    let sink: crate::sink::SinkFactory = Box::new(move |spec: &StreamSpec| {
+        let bpf = match spec {
+            StreamSpec::Pcm(p) => p.bytes_per_frame(),
+            StreamSpec::Dsd(_) => return Err(LyraError::Device("DSD sink unsupported".into())),
+        };
+        Ok(Box::new(DrainOnPushSink {
+            spec: *spec,
+            bpf,
+            drain_per_push: DRAIN_PER_PUSH,
+            pushed: pushed_c.clone(),
+            played: played_c.clone(),
+            flushes: flushes_c.clone(),
+        }) as Box<dyn AudioSink>)
+    });
+
+    let (wevt_tx, wevt_rx) = crossbeam_channel::unbounded::<WorkerEvt>();
+    let (wcmd_tx, wcmd_rx) = crossbeam_channel::unbounded();
+    let join = std::thread::Builder::new()
+        .name("eof-seek-worker".into())
+        .spawn(move || worker::run(wevt_tx, wcmd_rx, sink, source, TEST_PREROLL))
+        .unwrap();
+
+    let cushion = SPEC.rate as u64 * 250 / 1000;
+    let buffered = || pushed.load(Ordering::Relaxed).saturating_sub(played.load(Ordering::Relaxed));
+
+    wcmd_tx.send(WorkerCmd::Load(tref("t1", None))).unwrap();
+    wcmd_tx.send(WorkerCmd::PreloadNext(Some(tref("t2", None)))).unwrap();
+    wcmd_tx.send(WorkerCmd::Resume).unwrap();
+    assert!(
+        wait_until(Duration::from_secs(2), || buffered() >= cushion),
+        "the open prime should fill the ring from track 1 before the seek"
+    );
+    let flush_before = flushes.load(Ordering::Relaxed);
+
+    // Seek far past track 1's end, then Shutdown: one clean flush + reprime that
+    // advances onto track 2.
+    wcmd_tx.send(WorkerCmd::Seek(10_000_000)).unwrap();
+    wcmd_tx.send(WorkerCmd::Shutdown).unwrap();
+    join.join().unwrap();
+
+    let advanced: Vec<String> = wevt_rx
+        .try_iter()
+        .filter_map(|e| match e {
+            WorkerEvt::Advanced { info, spec_changed, .. } => {
+                assert!(!spec_changed, "same-spec advance must not re-open the device");
+                Some(info.track.path)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        advanced,
+        vec!["t2".to_string()],
+        "a seek past EOF advances once, cleanly, to the next track"
+    );
+
+    let flush_delta = flushes.load(Ordering::Relaxed) - flush_before;
+    assert_eq!(flush_delta, 1, "the end-of-track transition flushes exactly once (single-shot)");
+
+    let after = buffered();
+    assert!(
+        after >= cushion,
+        "after advancing the ring holds a full cushion of track 2 ({cushion} frames), \
+         not a near-empty stub ({after}) that would re-prime repeatedly"
     );
 }

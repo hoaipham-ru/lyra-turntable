@@ -261,18 +261,20 @@ impl Worker {
     fn main_loop(&mut self) {
         loop {
             match self.cmd_rx.recv_timeout(TICK) {
-                Ok(WorkerCmd::Shutdown) => break,
-                Ok(cmd) => {
-                    if !self.handle(cmd) {
-                        break;
-                    }
+                Ok(first) => {
+                    // Drain the whole batch that arrived within this wake, then
+                    // coalesce it, so a storm of back-to-back reloads/seeks (the P8
+                    // soak fires a PlayAt then a second PlayAt within one device
+                    // period) collapses to the user's last action and flushes +
+                    // re-primes the ring **once**, not once per command. Collecting
+                    // the batch before handling any command is what lets the
+                    // coalescer see — and drop — the superseded reloads.
+                    let mut batch = vec![first];
                     while let Ok(next) = self.cmd_rx.try_recv() {
-                        if matches!(next, WorkerCmd::Shutdown) {
-                            return;
-                        }
-                        if !self.handle(next) {
-                            return;
-                        }
+                        batch.push(next);
+                    }
+                    if !self.run_batch(coalesce(batch)) {
+                        break; // a Shutdown in the batch: stop (teardown runs in `run`)
                     }
                 }
                 Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
@@ -285,6 +287,18 @@ impl Worker {
             self.emit_position(false);
             self.check_track_end();
         }
+    }
+
+    /// Handle each command of an already-coalesced batch in order; stop at the first
+    /// [`WorkerCmd::Shutdown`] (returning `false`), leaving any trailing commands
+    /// unprocessed exactly as an immediate shutdown would.
+    fn run_batch(&mut self, batch: Vec<WorkerCmd>) -> bool {
+        for cmd in batch {
+            if !self.handle(cmd) {
+                return false;
+            }
+        }
+        true
     }
 
     /// Handle one command; returns `false` to stop the loop.
@@ -308,6 +322,12 @@ impl Worker {
         self.preload = Preload::None;
         self.respec = None;
         self.carry.clear();
+        // Drop the previous track's un-pushed device bytes too (the ring is dropped
+        // by `flush_sink` below). Without this, a reload while the ring was applying
+        // back-pressure could leak a superseded track's tail into the new segment —
+        // the exact B1 resurrection a coalesced double-reload must never cause.
+        self.pending.clear();
+        self.pending_off = 0;
 
         let resolved = match self.source.resolve(track) {
             Ok(r) => r,
@@ -983,6 +1003,64 @@ impl Worker {
     fn evt(&self, event: WorkerEvt) {
         self.evt_tx.send(event).ok();
     }
+}
+
+/// Collapse a batch of commands that arrived within one wake into the minimal set
+/// that reaches the same end state, so redundant navigation never flushes and
+/// re-primes the ring more than once.
+///
+/// The soak storm fires a navigation command (seek / next / prev / playat) every
+/// device period, and every 7th step a second one lands in the *same* period. Each
+/// `Load`/`Seek` the control thread forwards drives its own flush + synchronous
+/// re-prime; applying two in a row starts the second re-prime before the first has
+/// settled, doubling the empty-ring window the device can drain into. The user's
+/// intent is "the last action wins", so this keeps only the latest navigation and
+/// drops the ones it supersedes.
+///
+/// Rules (preserving original order for everything kept):
+/// * A `Load` or `Stop` fully (re)establishes the stream, so any earlier `Load`,
+///   `Stop` **or** `Seek` before the last such reset is dropped — its track/position
+///   no longer matters. This also upholds ADR-013 B1: the surviving `Load`/`Stop`
+///   still flushes the stale pre-reload tail before new audio is primed, and a
+///   superseded track's buffered audio is never resurrected.
+/// * A `Seek` is dropped when a later `Seek` (or a later reset) supersedes it; the
+///   last `Seek` after the last reset is the one that lands. A `Seek` that follows a
+///   surviving `Load` within the batch is kept — it targets that freshly loaded
+///   track.
+/// * `Resume` / `Pause` / `PreloadNext` / `Shutdown` carry their own semantics and
+///   are cheap (a flag set, an arm, or loop exit); each is kept, and the last of
+///   each wins naturally when applied in order. `Shutdown` is never dropped.
+pub(crate) fn coalesce(batch: Vec<WorkerCmd>) -> Vec<WorkerCmd> {
+    if batch.len() < 2 {
+        return batch;
+    }
+    let n = batch.len();
+    // Suffix scan: for each index, does a stronger command come later?
+    let mut later_reset = vec![false; n]; // a later `Load` or `Stop`
+    let mut later_seek = vec![false; n];
+    let mut acc_reset = false;
+    let mut acc_seek = false;
+    for i in (0..n).rev() {
+        later_reset[i] = acc_reset;
+        later_seek[i] = acc_seek;
+        match &batch[i] {
+            WorkerCmd::Load(_) | WorkerCmd::Stop => acc_reset = true,
+            WorkerCmd::Seek(_) => acc_seek = true,
+            _ => {}
+        }
+    }
+    let mut out = Vec::with_capacity(n);
+    for (i, cmd) in batch.into_iter().enumerate() {
+        let keep = match &cmd {
+            WorkerCmd::Load(_) | WorkerCmd::Stop => !later_reset[i],
+            WorkerCmd::Seek(_) => !later_reset[i] && !later_seek[i],
+            _ => true,
+        };
+        if keep {
+            out.push(cmd);
+        }
+    }
+    out
 }
 
 /// Source and device frame rates for the position clock.
