@@ -88,10 +88,13 @@ impl FlacWavDecoder {
         }
 
         let is_float = matches!(params.sample_format, Some(SymSampleFormat::F32) | Some(SymSampleFormat::F64));
+        // MP3/AAC/Vorbis have no bit depth: their decoders output f32. Quantise those
+        // to 24-bit integers (see write_block) rather than guessing 16.
+        let lossy = matches!(codec, "mp3" | "aac" | "vorbis");
         let bits_valid: u8 = params
             .bits_per_sample
             .map(|b| b.min(32) as u8)
-            .unwrap_or(if is_float { 32 } else { 16 });
+            .unwrap_or(if is_float { 32 } else if lossy { 24 } else { 16 });
 
         let target = if is_float {
             Target::float32()
@@ -292,9 +295,34 @@ fn write_block(
         AudioBufferRef::F32(buf) => {
             let frames = buf.frames();
             let mut produced = 0usize;
+            // Writing raw f32 bytes into an integer stream (the 1.0.1 MP3 bug) is loud
+            // noise: only a float target takes f32 as-is.
+            let full = (1i64 << (bits_valid.clamp(2, 32) - 1)) as f64;
             for f in skip..frames {
                 for ch in 0..channels {
-                    out.extend_from_slice(&buf.chan(ch)[f].to_le_bytes());
+                    let x = buf.chan(ch)[f];
+                    if target.is_float {
+                        out.extend_from_slice(&x.to_le_bytes());
+                    } else {
+                        target::push_int(out, f32_to_int(x, full), target);
+                    }
+                }
+                produced += 1;
+            }
+            produced
+        }
+        AudioBufferRef::F64(buf) => {
+            let frames = buf.frames();
+            let mut produced = 0usize;
+            let full = (1i64 << (bits_valid.clamp(2, 32) - 1)) as f64;
+            for f in skip..frames {
+                for ch in 0..channels {
+                    let x = buf.chan(ch)[f];
+                    if target.is_float {
+                        out.extend_from_slice(&(x as f32).to_le_bytes());
+                    } else {
+                        target::push_int(out, f32_to_int(x as f32, full), target);
+                    }
                 }
                 produced += 1;
             }
@@ -304,6 +332,29 @@ fn write_block(
         // PCM-WAV decoders in P1; treat any frames as unconvertible and skip them
         // rather than panic.
         _ => 0,
+    }
+}
+
+/// Float sample in [-1, 1) to a signed integer at full scale `full` (= 2^(bits-1)),
+/// rounded and clipped to the integer range.
+fn f32_to_int(x: f32, full: f64) -> i32 {
+    let v = (f64::from(x) * full).round();
+    v.clamp(-full, full - 1.0) as i32
+}
+
+#[cfg(test)]
+mod float_conversion_tests {
+    use super::f32_to_int;
+
+    #[test]
+    fn scales_rounds_and_clips() {
+        let full = (1i64 << 23) as f64; // 24-bit
+        assert_eq!(f32_to_int(0.0, full), 0);
+        assert_eq!(f32_to_int(0.5, full), 1 << 22);
+        assert_eq!(f32_to_int(-1.0, full), -(1 << 23));
+        assert_eq!(f32_to_int(1.0, full), (1 << 23) - 1); // clipped, no wrap
+        assert_eq!(f32_to_int(3.0, full), (1 << 23) - 1);
+        assert_eq!(f32_to_int(-3.0, full), -(1 << 23));
     }
 }
 

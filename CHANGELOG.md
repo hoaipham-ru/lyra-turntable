@@ -10,7 +10,7 @@ This project follows [Semantic Versioning](https://semver.org/).
 - The playlist picker count (Default Playlist · N) now updates when the list changes.
 - **MP3 (and AAC/M4A, ALAC, Ogg Vorbis, AIFF) now play** in the Lyra engine. In 1.0.0 only
   FLAC/WAV/DSD decoded, so choosing an MP3 did nothing and showed no error. These formats
-  are decoded by symphonia; their parity tests against foobar2000 (P1b) are still pending.
+  are decoded by symphonia to float and quantised once to 24-bit integers (peak and RMS match ffmpeg to 0.001 dB on a test MP3). Their full parity tests against foobar2000 (P1b) are still pending; MP3 encoder delay/padding is not trimmed yet (~20-40 ms of extra silence at the start).
 - A playback error (e.g. a file the engine cannot decode) now shows as a toast instead of
   failing silently.
 - **No more two "Default Playlist" entries.** foobar2000's own scratch playlist is now
