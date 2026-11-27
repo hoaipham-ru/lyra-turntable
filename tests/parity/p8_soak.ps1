@@ -134,8 +134,13 @@ function Start-Play([bool]$offlineMode) {
     $a = @()
     if ($offlineMode) { $a += @('--offline', $offlineOut) }
     $a += @('--mode', 'exclusive', '--script', $scriptPath, '--max-seconds', "$maxSeconds")
-    $a += $queue
-    return Start-Process -FilePath $Play -ArgumentList $a -PassThru -RedirectStandardOutput $playOut -RedirectStandardError $playErr -WindowStyle Hidden
+    # Quote each queue path: Windows PowerShell 5.1 Start-Process does not quote array
+    # args containing spaces, so corpus paths (e.g. "...\CD 01\12 - Summer.flac") would
+    # be split into broken args and fail to open (os error 2/3). Same fix as p8_perf.ps1.
+    foreach ($qp in $queue) { $a += ('"' + $qp + '"') }
+    $sp = Start-Process -FilePath $Play -ArgumentList $a -PassThru -RedirectStandardOutput $playOut -RedirectStandardError $playErr -WindowStyle Hidden
+    $null = $sp.Handle   # cache the handle so HasExited/WorkingSet64/ExitCode stay valid after exit
+    return $sp
 }
 
 try {
@@ -150,10 +155,16 @@ try {
         $attempt = 0; $deviceFree = $false
         while ($attempt -le $RetryBusyMax) {
             $testOut = Join-Path $TmpDir 'devtest.out'
-            $p = Start-Process -FilePath $Play -ArgumentList @('--mode','exclusive','--max-seconds','3', $queue[0]) -PassThru -RedirectStandardOutput $testOut -RedirectStandardError (Join-Path $TmpDir 'devtest.err') -WindowStyle Hidden
+            $p = Start-Process -FilePath $Play -ArgumentList @('--mode','exclusive','--max-seconds','3', ('"' + $queue[0] + '"')) -PassThru -RedirectStandardOutput $testOut -RedirectStandardError (Join-Path $TmpDir 'devtest.err') -WindowStyle Hidden
+            $null = $p.Handle   # cache the handle BEFORE exit, else $p.ExitCode is $null (same Start-Process bug fixed in p8_perf.ps1) and a working device is misread as failed
             $p.WaitForExit()
             $errTxt = (Get-Content -LiteralPath (Join-Path $TmpDir 'devtest.err') -Raw -ErrorAction SilentlyContinue)
-            if ($p.ExitCode -eq 0) { $deviceFree = $true; break }
+            $testStdout = (Get-Content -LiteralPath $testOut -Raw -ErrorAction SilentlyContinue)
+            # Device-free if the probe exited clean OR it demonstrably rendered to the
+            # device (reached "Done. underruns:" with no device-busy error). The second
+            # arm guards against a flaky ExitCode read under heavy CPU load from the loaders.
+            $rendered = ($testStdout -match 'Rendering to the audio device' -and $testStdout -match 'Done\. underruns:')
+            if ($p.ExitCode -eq 0 -or $rendered) { $deviceFree = $true; break }
             if ($errTxt -match 'DEVICE_IN_USE|in use|busy') {
                 $attempt++
                 $deviceNote += "device busy (attempt $attempt); "
