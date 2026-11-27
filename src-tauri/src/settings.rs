@@ -20,8 +20,9 @@ use tauri::{AppHandle, Manager};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct AppSettings {
-    /// Which player drives the UI: `"foobar"` (today's Beefweb path) or
-    /// `"native"` (the lyra-engine path). Defaults to `"foobar"`.
+    /// Which player drives the UI: `"native"` (the lyra-engine path, the default
+    /// since P8.4's cutover) or `"foobar"` (the legacy Beefweb path, kept as a
+    /// hidden advanced setting). A fresh install comes up on `"native"`.
     pub backend: String,
     /// Selected render endpoint id (the `IMMDevice::GetId` string from
     /// [`crate::engine::devices`]). Empty string means the system default.
@@ -33,15 +34,22 @@ pub struct AppSettings {
     /// config (sets `OutputMode::Asio { native_dsd: true }`); the rest are routing
     /// hints the engine resolves against device caps (ADR-009).
     pub dsd_mode: String,
+    /// One-time guard for the foobar2000 → native playlist migration (P8.4). Set
+    /// to `true` once the migration has run (or was attempted against an existing
+    /// foobar2000 v2 profile) so it never re-runs and never clobbers playlists the
+    /// user has since edited. Stays `false` when no foobar2000 profile was present,
+    /// so a later foobar2000 install can still be imported once.
+    pub foobar_migrated: bool,
 }
 
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
-            backend: "foobar".into(),
+            backend: "native".into(),
             device_id: String::new(),
             mode: "exclusive".into(),
             dsd_mode: "auto".into(),
+            foobar_migrated: false,
         }
     }
 }
@@ -96,10 +104,49 @@ pub fn settings_get(app: AppHandle) -> AppSettings {
     load(&app)
 }
 
+/// Persist app settings to the config dir as JSON. Shared by the `settings_set`
+/// command and internal callers (e.g. the one-time foobar2000 migration guard).
+pub fn persist(app: &AppHandle, settings: &AppSettings) -> Result<(), String> {
+    let path = settings_path(app)?;
+    let json = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
+    std::fs::write(path, json).map_err(|e| e.to_string())
+}
+
 /// Persist app settings to the config dir as JSON.
 #[tauri::command]
 pub fn settings_set(app: AppHandle, settings: AppSettings) -> Result<(), String> {
-    let path = settings_path(&app)?;
-    let json = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
-    std::fs::write(path, json).map_err(|e| e.to_string())
+    persist(&app, &settings)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_backend_is_native() {
+        // P8.4 cutover: a fresh install / unset settings must come up on native.
+        let s = AppSettings::default();
+        assert_eq!(s.backend, "native");
+        assert!(!s.foobar_migrated, "migration guard starts un-run");
+    }
+
+    #[test]
+    fn missing_fields_fill_from_default() {
+        // A settings.json written before the `foobarMigrated` field existed must
+        // still load (serde(default)) and resolve to the native default.
+        let old = r#"{"backend":"native","deviceId":"","mode":"exclusive","dsdMode":"auto"}"#;
+        let s: AppSettings = serde_json::from_str(old).unwrap();
+        assert_eq!(s.backend, "native");
+        assert!(!s.foobar_migrated);
+    }
+
+    #[test]
+    fn migrated_flag_round_trips() {
+        let mut s = AppSettings::default();
+        s.foobar_migrated = true;
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains("\"foobarMigrated\":true"));
+        let back: AppSettings = serde_json::from_str(&json).unwrap();
+        assert!(back.foobar_migrated);
+    }
 }

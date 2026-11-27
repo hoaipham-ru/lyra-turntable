@@ -29,7 +29,8 @@ type DeviceDto = {
 const inTauri = "__TAURI_INTERNALS__" in window;
 const KEY = "tt.settings"; // localStorage fallback key
 
-const DEFAULTS: AppSettings = { backend: "foobar", deviceId: "", mode: "exclusive", dsdMode: "auto" };
+// P8.4 cutover: native is the default; foobar2000 is a hidden legacy fallback.
+const DEFAULTS: AppSettings = { backend: "native", deviceId: "", mode: "exclusive", dsdMode: "auto" };
 
 function loadLocal(): AppSettings {
   try {
@@ -120,20 +121,28 @@ export function Settings({ onClose, onBackendChange }: { onClose: () => void; on
       >
         <h2>{S.settingsTitle}</h2>
 
-        {/* Backend: foobar2000 (legacy) vs Lyra native (bit-perfect). */}
+        {/* Backend: Lyra native (bit-perfect) is the default and only normal choice.
+            foobar2000 stays available as a hidden legacy fallback in the advanced
+            area below (P8.4): Lyra never requires foobar2000. */}
         <fieldset className="sfield">
           <legend>{S.backendLabel}</legend>
           <div className="radios">
-            <label>
-              <input type="radio" name="backend" checked={s.backend === "foobar"} onChange={() => save({ backend: "foobar" })} />
-              <span>{S.backendFoobar}</span>
-            </label>
             <label>
               <input type="radio" name="backend" checked={s.backend === "native"} onChange={() => save({ backend: "native" })} />
               <span>{S.backendNative}</span>
             </label>
           </div>
           <p className="hint">{S.backendHint}</p>
+          <details className="advanced" open={s.backend === "foobar"}>
+            <summary>{S.backendLegacyLabel}</summary>
+            <div className="radios">
+              <label>
+                <input type="radio" name="backend" checked={s.backend === "foobar"} onChange={() => save({ backend: "foobar" })} />
+                <span>{S.backendFoobar}</span>
+              </label>
+            </div>
+            <p className="hint">{S.backendLegacyHint}</p>
+          </details>
         </fieldset>
 
         {/* Output device: system default + probed render endpoints. */}

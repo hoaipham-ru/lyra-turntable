@@ -103,6 +103,10 @@ button { font: inherit; border: 0; background: none; cursor: pointer; color: inh
 .dialog .radios label { display: flex; align-items: center; gap: 8px; margin: 0; font: 14px "Newsreader", serif; color: #2a2622; cursor: pointer; }
 .dialog .radios input { width: auto; height: auto; accent-color: #9c2f22; }
 .dialog .hint { margin: 6px 0 0; font-size: 12.5px; font-style: italic; color: #7a6f62; }
+.dialog .advanced { margin-top: 10px; border-top: 1px solid #d8ccb6; padding-top: 8px; }
+.dialog .advanced > summary { font: 12px "DM Mono", monospace; color: #6b6258; cursor: pointer; list-style: revert; }
+.dialog .advanced > summary:focus-visible { outline: 2px solid #9c2f22; outline-offset: 2px; }
+.dialog .advanced > .radios { margin-top: 8px; }
 .dialog .applynote { margin-top: 12px; padding-top: 10px; border-top: 1px solid #d8ccb6; }
 
 /* list hidden: the card shrinks to the now-playing block */
