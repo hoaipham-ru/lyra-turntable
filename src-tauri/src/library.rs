@@ -232,6 +232,24 @@ pub fn playlists_reorder(app: AppHandle, state: State<'_, LibraryState>, id: Str
     with_store(&app, &state, |store| store.reorder(pid, from, to).map_err(|e| e.to_string()))
 }
 
+/// Delete a whole playlist (its items go with it). The scratch "Default Playlist"
+/// cannot be deleted - it is recreated on every start anyway.
+#[tauri::command]
+pub fn playlists_delete(app: AppHandle, state: State<'_, LibraryState>, id: String) -> Result<(), String> {
+    let pid = parse_id(&id)?;
+    with_store(&app, &state, |store| {
+        let is_default = store
+            .list()
+            .map_err(|e| e.to_string())?
+            .iter()
+            .any(|p| p.id == pid && p.title == lyra_library::playlists::DEFAULT_PLAYLIST_TITLE);
+        if is_default {
+            return Err("the Default Playlist cannot be deleted".into());
+        }
+        store.remove(pid).map_err(|e| e.to_string())
+    })
+}
+
 /// Clear all items from a playlist.
 #[tauri::command]
 pub fn playlists_clear(app: AppHandle, state: State<'_, LibraryState>, id: String) -> Result<(), String> {

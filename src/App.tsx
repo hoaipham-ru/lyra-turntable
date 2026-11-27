@@ -83,6 +83,7 @@ export default function App() {
   const [dropping, setDropping] = useState(false);
   const [toast, setToast] = useState("");
   const [confirmClear, setConfirmClear] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const listRef = useRef<HTMLOListElement>(null);
   // Playlist card selection + drag-to-reorder (foobar2000-style: click selects, double-click plays).
@@ -237,6 +238,7 @@ export default function App() {
     await pRef.current.waitForItems(before + 1);
     say(`Added ${paths.length} item(s) to ${sel?.title ?? "playlist"}`);
   }, [addToBackend]);
+  const selIsDefault = isDefault(p.playlists.find((x) => x.id === p.selected)?.title ?? "");
   const clearShown = () => {
     const sel = p.playlists.find((x) => x.id === p.selected);
     if (sel && isDefault(sel.title)) store.set(TOUCHED, "0");
@@ -433,6 +435,18 @@ export default function App() {
             options={p.playlists.map((pl) => ({ value: pl.id, label: `${pl.title} · ${pl.itemCount}` }))}
           />
           <button className="mini" title="New playlist (Ctrl+N)" onClick={actions.newPlaylist}>＋</button>
+          {p.deletePlaylist && (
+            <button className={"mini " + (confirmDelete ? "danger" : "")} aria-label="Delete this playlist"
+              title={selIsDefault ? "The Default Playlist cannot be deleted" : "Delete this playlist"} disabled={!p.selected || selIsDefault}
+              onClick={() => {
+                if (!confirmDelete) { setConfirmDelete(true); setTimeout(() => setConfirmDelete(false), 3000); return; }
+                setConfirmDelete(false);
+                const sel = p.playlists.find((x) => x.id === p.selected);
+                void p.deletePlaylist!(p.selected!).then(() => say(`Deleted ${sel?.title ?? "playlist"}`)).catch((e) => say(`Cannot delete: ${e}`));
+              }}>
+              {confirmDelete ? "Sure?" : "🗑"}
+            </button>
+          )}
           <button className={"mini " + (confirmClear ? "danger" : "")} title="Remove all tracks from this playlist" disabled={!p.list.length}
             onClick={() => { if (confirmClear) { setConfirmClear(false); clearShown(); } else { setConfirmClear(true); setTimeout(() => setConfirmClear(false), 3000); } }}>
             {confirmClear ? "Sure?" : "Clear"}

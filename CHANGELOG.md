@@ -6,7 +6,7 @@ This project follows [Semantic Versioning](https://semver.org/).
 ## 1.0.1 — 2026-11-27
 
 ### Fixed
-- **Track length now shows and the seek bar works** with the Lyra engine (all formats, incl. DSD). The engine event fields went to the UI in snake_case (duration_seconds, it_perfect, …) while the UI reads camelCase, so the length stayed 0:00, the seek bar and needle drop were disabled, and the bit-perfect flag was not read. Fixed with ename_all_fields; regression test added.
+- **Track length now shows and the seek bar works** with the Lyra engine (all formats, incl. DSD). The engine event fields went to the UI in snake_case (`duration_seconds`, `bit_perfect`, …) while the UI reads camelCase, so the length stayed 0:00, the seek bar and needle drop were disabled, and the bit-perfect flag was not read. Fixed with `rename_all_fields`; regression test added.
 - The playlist picker count (Default Playlist · N) now updates when the list changes.
 - **MP3 (and AAC/M4A, ALAC, Ogg Vorbis, AIFF) now play** in the Lyra engine. In 1.0.0 only
   FLAC/WAV/DSD decoded, so choosing an MP3 did nothing and showed no error. These formats
@@ -18,6 +18,10 @@ This project follows [Semantic Versioning](https://semver.org/).
   playlists; foobar2000's playlists show up only when you switch to the legacy foobar2000
   backend (read live). Extra "Default Playlist" copies left by the old import (incl.
   "Default Playlist (foobar2000)" / "(2)") are removed automatically; other playlists are kept.
+- **Delete playlist** (🗑 next to ＋ in the playlist card, click twice to confirm). Removes
+  the playlist and its items from Lyra's own store only; the Default Playlist cannot be
+  deleted, and foobar2000's playlists are never touched.
+
 ## 1.0.0 — 2026-11-27
 
 **Lyra is now a standalone high-end audio engine.** It decodes and plays FLAC, WAV and

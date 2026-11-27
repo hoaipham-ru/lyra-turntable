@@ -343,6 +343,22 @@ export function useNativeBackend(): PlayerBackend {
       await invoke("playlists_remove", { id, indices: idx }).catch(() => {});
       await loadList(id);
     },
+    deletePlaylist: async (id) => {
+      if (!inTauri) return;
+      await invoke("playlists_delete", { id });
+      if (queueOwner.current === id) {
+        queueOwner.current = null;
+        queuePaths.current = [];
+      }
+      if (selRef.current === id) {
+        selRef.current = null;
+        setSelected(null);
+      }
+      const next = await loadPlaylists();
+      const target = next ?? selRef.current;
+      if (target) await loadList(target);
+      else setList([]);
+    },
     moveItem: async (from, to) => {
       const id = selRef.current;
       if (!id || from === to) return;

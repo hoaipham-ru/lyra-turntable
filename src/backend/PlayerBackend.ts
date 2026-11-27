@@ -29,6 +29,8 @@ export type PlayerBackend = {
   removeItems: (idx: number[]) => Promise<void>;
   // Move one item (drag-to-reorder). Optional: backends without it disable dragging.
   moveItem?: (from: number, to: number) => Promise<void>;
+  // Delete a whole playlist (not the Default Playlist). Optional: Lyra backend only.
+  deletePlaylist?: (id: string) => Promise<void>;
   // Last playback error with a counter so the same message can be shown again.
   lastError?: { message: string; seq: number } | null;
   clearPlaylist: () => Promise<void>;

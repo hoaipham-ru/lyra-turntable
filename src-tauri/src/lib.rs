@@ -250,6 +250,7 @@ pub fn run() {
             library::playlists_add,
             library::playlists_remove,
             library::playlists_reorder,
+            library::playlists_delete,
             library::playlists_clear,
             library::playlists_import_m3u,
             library::playlists_export_m3u,
